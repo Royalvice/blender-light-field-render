@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lenticular Pixel Grid Visualization</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #1e1e1e; font-family: sans-serif; color: #ddd; }
+        #canvas-container { width: 100vw; height: 100vh; cursor: grab; }
+        #canvas-container:active { cursor: grabbing; }
+        #ui-layer { position: absolute; top: 0; left: 0; pointer-events: none; width: 100%; height: 100%; }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            pointer-events: auto;
+        }
+        h1 { margin: 0 0 10px 0; font-size: 1.2rem; color: #fff; }
+        .control-group { margin-bottom: 8px; font-size: 0.9rem; }
+        label { display: inline-block; width: 120px; }
+        input[type=number], input[type=text] { width: 60px; background: #333; border: 1px solid #555; color: white; padding: 2px 5px; }
+        button { background: #444; color: white; border: none; padding: 5px 10px; cursor: pointer; margin-top: 5px; }
+        button:hover { background: #555; }
+    </style>
+</head>
+<body>
+    <div id="canvas-container">
+        <canvas id="gridCanvas"></canvas>
+    </div>
+    <div id="info">
+        <h1>Lenticular Grid Viz</h1>
+        <div class="control-group">
+            <label>Scale (Zoom)</label>
+            <input type="range" id="scaleSlider" min="5" max="100" value="40">
+        </div>
+        <div class="control-group">
+            <label>PE (Pitch)</label>
+            <input type="number" id="peInput" value="6.666666" step="0.0001">
+        </div>
+        <div class="control-group">
+            <label>Tan(Angle)</label>
+            <input type="number" id="angleInput" value="0.111111" step="0.0001">
+        </div>
+        <div class="control-group">
+            <label>Offset</label>
+            <input type="number" id="offsetInput" value="0.0" step="0.1">
+        </div>
+        <div class="control-group">
+            <label>Num Views</label>
+            <input type="number" id="viewsInput" value="60">
+        </div>
+        <div class="control-group">
+            <label>Lens Opacity</label>
+            <input type="range" id="lensOpacity" min="0" max="1" step="0.1" value="0.4">
+        </div>
+        <div style="margin-top:10px; font-size: 0.8rem; color: #aaa;">
+            Drag to Pan | Scroll to Zoom<br>
+            Hover pixel for info
+        </div>
+        <div id="hoverInfo" style="margin-top:10px; font-weight:bold; color: #0f0;">
+            -
+        </div>
+    </div>
+
+    <script type="module" src="./src/pixel_grid.js"></script>
+</body>
+</html>
+
