@@ -5,14 +5,48 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Light Field Camera Array Visualization</title>
     <style>
-      body { margin: 0; overflow: hidden; background-color: #111; color: white; font-family: sans-serif; }
+      body { margin: 0; overflow: hidden; background-color: #111111; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
       #info {
         position: absolute;
-        top: 10px;
-        left: 10px;
+        top: 20px;
+        left: 20px;
         pointer-events: none;
         z-index: 100;
+        background: rgba(0, 0, 0, 0.85);
+        padding: 15px;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+        border: 1px solid #333;
       }
+      #info h1 { margin: 0; font-size: 1.2rem; font-weight: 600; color: #eee; }
+      #info p { margin: 5px 0 0; font-size: 0.9rem; color: #aaa; }
+
+      #legend {
+        position: absolute;
+        bottom: 20px;
+        right: 20px;
+        background: rgba(0, 0, 0, 0.85);
+        padding: 15px;
+        border-radius: 8px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        border: 1px solid #333;
+        z-index: 100;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        pointer-events: none;
+        font-size: 0.85rem;
+        color: #ddd;
+        font-weight: 500;
+      }
+      .legend-item { display: flex; align-items: center; gap: 10px; }
+      .icon { width: 16px; height: 16px; display: inline-block; border-radius: 3px; vertical-align: middle; }
+      .icon-camera { background: #888; }
+      .icon-focal { border: 2px solid #888; background: #000; box-sizing: border-box; }
+      .icon-frustum { border-bottom: 2px solid #ffaa00; height: 0; width: 20px; margin-bottom: 8px; }
+      .icon-ray-r { border-bottom: 2px solid #ff4444; height: 0; width: 20px; margin-bottom: 8px; }
+      .icon-ray-g { border-bottom: 2px solid #44ff44; height: 0; width: 20px; margin-bottom: 8px; }
+      .icon-ray-b { border-bottom: 2px solid #4444ff; height: 0; width: 20px; margin-bottom: 8px; }
     </style>
     <script type="importmap">
         {
@@ -26,8 +60,17 @@
   </head>
   <body>
     <div id="info">
-      <h1>Light Field Camera Array</h1>
-      <p>Visualizing Off-Axis Projection</p>
+      <h1>Figure 1: Light Field Camera Array</h1>
+      <p>Off-Axis Projection Visualization</p>
+    </div>
+    
+    <div id="legend">
+        <div class="legend-item"><span class="icon icon-camera"></span> Camera</div>
+        <div class="legend-item"><span class="icon icon-focal"></span> Focal Plane</div>
+        <div class="legend-item"><span class="icon icon-frustum"></span> Frustum</div>
+        <div class="legend-item"><span class="icon icon-ray-r"></span> Red Channel Ray</div>
+        <div class="legend-item"><span class="icon icon-ray-g"></span> Green Channel Ray</div>
+        <div class="legend-item"><span class="icon icon-ray-b"></span> Blue Channel Ray</div>
     </div>
     <script type="module" src="./src/main.js"></script>
   </body>
