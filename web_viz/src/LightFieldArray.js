@@ -10,6 +10,7 @@ export class LightFieldArray {
         this.helpers = [];
         this.cameraMeshes = [];
         this.rayLines = null;
+        this.probeHitMesh = null;
         
         // Materials
         // Focal plane will now use a texture, so we use white color to modulate
@@ -21,6 +22,13 @@ export class LightFieldArray {
             wireframe: false
         });
         this.focalPlaneBorderMat = new THREE.LineBasicMaterial({ color: 0x444444 }); // Dark border
+        this.probePlaneMat = new THREE.MeshBasicMaterial({
+            color: 0x00ccff,
+            transparent: true,
+            opacity: 0.25,
+            side: THREE.DoubleSide
+        });
+        this.probePlaneBorderMat = new THREE.LineBasicMaterial({ color: 0x00aaff });
         
         this.cubeMat = new THREE.LineBasicMaterial({ color: 0x0088ff, transparent: true, opacity: 0.5 }); // Bright Blue
         
@@ -29,11 +37,14 @@ export class LightFieldArray {
 
         // Objects
         this.focalPlaneMesh = null;
+        this.probePlaneMesh = null;
         this.displayCubeHelper = null;
         
         // Ray Visualization Objects
         this.rayGroup = new THREE.Group();
         this.group.add(this.rayGroup);
+        this.probeHitGroup = new THREE.Group();
+        this.group.add(this.probeHitGroup);
         this.singleRayLine = null; // For hover interaction
         
         // Current Parameters
@@ -83,10 +94,14 @@ export class LightFieldArray {
         // Clean up existing
         this.group.clear();
         this.group.add(this.rayGroup); // Keep ray group
+        this.group.add(this.probeHitGroup); // Keep probe hit group
         this.rayGroup.clear(); // Clear rays inside
+        this.probeHitGroup.clear();
+        this.probeHitMesh = null;
         this.cameras = [];
         this.helpers = [];
         this.cameraMeshes = [];
+        this.probePlaneMesh = null;
 
         const {
             N, // Camera count
@@ -98,7 +113,12 @@ export class LightFieldArray {
             far,
             d_cube, // Display cube depth
             showFrustums,
-            activeCameraIndex
+            activeCameraIndex,
+            probePlaneZ = 0,
+            showProbePlane = true,
+            probeHitSize = 0.08,
+            probeScale = 1,
+            arrayAngleDeg
         } = params;
 
         // 1. Calculate Derived Parameters
@@ -107,6 +127,14 @@ export class LightFieldArray {
         const fovRad = THREE.MathUtils.degToRad(fov_s);
         const W_f = 2 * d_f * Math.tan(fovRad / 2);
         const H_f = W_f / aspect;
+
+        // Array spread angle (user controlled). Width is derived from angle for consistency.
+        const arrayAngleRad = THREE.MathUtils.degToRad(
+            arrayAngleDeg !== undefined
+                ? arrayAngleDeg
+                : THREE.MathUtils.radToDeg(2 * Math.atan((W_array / 2) / d_f))
+        );
+        params.W_array = 2 * d_f * Math.tan(arrayAngleRad / 2);
 
         this.W_f = W_f;
         this.H_f = H_f;
@@ -134,9 +162,22 @@ export class LightFieldArray {
         this.displayCubeHelper.position.set(0, 0, 0);
         this.group.add(this.displayCubeHelper);
 
+        // 3.5 Movable probe plane for ray intersection visualization
+        if (showProbePlane) {
+            const probeGeo = new THREE.PlaneGeometry(W_f * probeScale, H_f * probeScale);
+            this.probePlaneMesh = new THREE.Mesh(probeGeo, this.probePlaneMat);
+            this.probePlaneMesh.position.set(0, 0, probePlaneZ);
+            this.probePlaneMesh.name = "ProbePlane";
+            this.group.add(this.probePlaneMesh);
+
+            const probeEdges = new THREE.EdgesGeometry(probeGeo);
+            const probeBorder = new THREE.LineSegments(probeEdges, this.probePlaneBorderMat);
+            this.probePlaneMesh.add(probeBorder);
+        }
+
         // 4. Create Cameras
         for (let i = 0; i < N; i++) {
-            const theta = 2 * Math.atan((W_array / 2) / d_f);
+            const theta = arrayAngleRad;
             const u = (N > 1) ? i / (N - 1) : 0.5;
             const angle_i = (u - 0.5) * theta;
             // Removed negative sign to place Camera 0 at Left (-x) instead of Right (+x)
@@ -366,12 +407,48 @@ export class LightFieldArray {
         return new THREE.Vector3(worldX, worldY, worldZ);
     }
 
+    // Get intersection of ray (camera -> focal point) with arbitrary Z plane
+    getPointOnPlane(camPos, focalPos, planeZ) {
+        const dir = new THREE.Vector3().subVectors(focalPos, camPos);
+        if (Math.abs(dir.z) < 1e-6) {
+            // Degenerate; return focal point to avoid NaN
+            return focalPos.clone();
+        }
+        const t = (planeZ - camPos.z) / dir.z;
+        return new THREE.Vector3().copy(camPos).addScaledVector(dir, t);
+    }
+
+    buildProbeHits(hits, radius, visible) {
+        this.probeHitGroup.clear();
+        if (this.probeHitMesh) {
+            this.probeHitMesh.geometry.dispose();
+            this.probeHitMesh.material.dispose();
+            this.probeHitMesh = null;
+        }
+        if (!visible || !hits.length) return;
+
+        const geometry = new THREE.SphereGeometry(radius, 12, 12);
+        const material = new THREE.MeshStandardMaterial({ vertexColors: true, emissive: new THREE.Color(0x111111) });
+        const inst = new THREE.InstancedMesh(geometry, material, hits.length);
+        hits.forEach((h, idx) => {
+            const m = new THREE.Matrix4().setPosition(h.pos);
+            inst.setMatrixAt(idx, m);
+            inst.setColorAt(idx, h.color);
+        });
+        inst.instanceMatrix.needsUpdate = true;
+        inst.instanceColor.needsUpdate = true;
+        this.probeHitMesh = inst;
+        this.probeHitGroup.add(inst);
+    }
+
     // Visualize a single pixel (3 subpixels -> 3 rays)
     highlightPixel(x, y) {
         this.rayGroup.clear();
+        this.probeHitGroup.clear();
         
         const positions = [];
         const colors = [];
+        const hits = [];
         
         const subColors = [
             new THREE.Color(1, 0, 0), // R
@@ -379,19 +456,30 @@ export class LightFieldArray {
             new THREE.Color(0, 0, 1)  // B
         ];
         
+        const endPlaneZ = (this.currentParams.showProbePlane ? this.currentParams.probePlaneZ : 0);
+
         for (let k = 0; k < 3; k++) {
             const viewId = this.getViewId(x, y, k);
             const targetPos = this.getSubPixelPosition(x, y, k);
             
             if (this.cameras[viewId]) {
                 const camPos = this.cameras[viewId].position;
-                
+                const endPos = this.getPointOnPlane(
+                    camPos,
+                    targetPos,
+                    endPlaneZ
+                );
+
                 positions.push(camPos.x, camPos.y, camPos.z);
-                positions.push(targetPos.x, targetPos.y, targetPos.z);
+                positions.push(endPos.x, endPos.y, endPos.z);
                 
                 const c = subColors[k];
                 colors.push(c.r, c.g, c.b);
                 colors.push(c.r, c.g, c.b);
+
+                if (this.currentParams.showProbePlane) {
+                    hits.push({ pos: endPos, color: c });
+                }
             }
         }
         
@@ -403,15 +491,18 @@ export class LightFieldArray {
         const lines = new THREE.LineSegments(geometry, material);
         
         this.rayGroup.add(lines);
+        this.buildProbeHits(hits, this.currentParams.probeHitSize ?? 0.08, this.currentParams.showProbePlane);
     }
     
     // Feature 2: Visualize all rays for a specific Camera (Viewpoint)
     showRaysForCamera(cameraIndex, channel = 'All') {
         this.rayGroup.clear();
+        this.probeHitGroup.clear();
         const { resW, resH } = this.lenticularParams;
         
         const positions = [];
         const colors = [];
+        const hits = [];
         
         const subColors = [
             new THREE.Color(1, 0, 0),
@@ -419,6 +510,8 @@ export class LightFieldArray {
             new THREE.Color(0, 0, 1)
         ];
         
+        const endPlaneZ = (this.currentParams.showProbePlane ? this.currentParams.probePlaneZ : 0);
+
         const cam = this.cameras[cameraIndex];
         if (!cam) return;
         const camPos = cam.position;
@@ -435,14 +528,23 @@ export class LightFieldArray {
                     
                     if (viewId === cameraIndex) {
                         const targetPos = this.getSubPixelPosition(x, y, k);
+                        const endPos = this.getPointOnPlane(
+                            camPos,
+                            targetPos,
+                            endPlaneZ
+                        );
                         
                         positions.push(camPos.x, camPos.y, camPos.z);
-                        positions.push(targetPos.x, targetPos.y, targetPos.z);
+                        positions.push(endPos.x, endPos.y, endPos.z);
                         
                         // Use dimmer colors for mass display
                         const c = subColors[k];
                         colors.push(c.r, c.g, c.b); // Start color (at camera)
                         colors.push(c.r * 0.5, c.g * 0.5, c.b * 0.5); // End color (at focal plane)
+
+                        if (this.currentParams.showProbePlane) {
+                            hits.push({ pos: endPos, color: c.clone().multiplyScalar(0.9) });
+                        }
                     }
                 }
             }
@@ -464,15 +566,18 @@ export class LightFieldArray {
         });
         const lines = new THREE.LineSegments(geometry, material);
         this.rayGroup.add(lines);
+        this.buildProbeHits(hits, this.currentParams.probeHitSize ?? 0.08, this.currentParams.showProbePlane);
     }
     
     // Visualize ALL rays for 64x64 grid
     showAllRays(channel = 'All') {
         this.rayGroup.clear();
+        this.probeHitGroup.clear();
         const { resW, resH } = this.lenticularParams;
         
         const positions = [];
         const colors = [];
+        const hits = [];
         
         const subColors = [
             new THREE.Color(1, 0, 0),
@@ -480,6 +585,8 @@ export class LightFieldArray {
             new THREE.Color(0, 0, 1)
         ];
         
+        const endPlaneZ = (this.currentParams.showProbePlane ? this.currentParams.probePlaneZ : 0);
+
         // To avoid freezing, let's limit drawing or use simple lines
         // 64*64*3 = 12288 lines. WebGL can handle this easily.
         
@@ -496,14 +603,23 @@ export class LightFieldArray {
                     if (this.cameras[viewId]) {
                         const targetPos = this.getSubPixelPosition(x, y, k);
                         const camPos = this.cameras[viewId].position;
+                        const endPos = this.getPointOnPlane(
+                            camPos,
+                            targetPos,
+                            endPlaneZ
+                        );
                         
                         positions.push(camPos.x, camPos.y, camPos.z);
-                        positions.push(targetPos.x, targetPos.y, targetPos.z);
+                        positions.push(endPos.x, endPos.y, endPos.z);
                         
                         // Use dimmer colors for mass display
                         const c = subColors[k];
                         colors.push(c.r * 0.3, c.g * 0.3, c.b * 0.3);
-                        colors.push(c.r * 0.5, c.g * 0.5, c.b * 0.5); // Gradient to focal plane
+                        colors.push(c.r * 0.5, c.g * 0.5, c.b * 0.5); // Gradient to probe plane
+
+                        if (this.currentParams.showProbePlane) {
+                            hits.push({ pos: endPos, color: c.clone().multiplyScalar(0.8) });
+                        }
                     }
                 }
             }
@@ -523,5 +639,6 @@ export class LightFieldArray {
         });
         const lines = new THREE.LineSegments(geometry, material);
         this.rayGroup.add(lines);
+        this.buildProbeHits(hits, this.currentParams.probeHitSize ?? 0.08, this.currentParams.showProbePlane);
     }
 }

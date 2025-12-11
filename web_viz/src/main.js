@@ -73,22 +73,40 @@ const params = {
     showFrustums: true,
     activeCameraIndex: 0,
     
+    // Array spread
+    arrayAngleDeg: 0, // will be initialized below
+    
     // View Control
     viewFromActive: false,
     
     // Focal Plane
     focalPlaneMode: 'ViewMap', // 'ViewMap' or 'Lit'
     
+    // Movable probe plane
+    showProbePlane: true,
+    probePlaneZ: 0,
+    probeScale: 1,
+    probeHitSize: 0.08,
+    
     // Info
     currentShiftX: 0
 };
+
+// Derive initial array spread angle from width/depth
+params.arrayAngleDeg = THREE.MathUtils.radToDeg(2 * Math.atan((params.W_array / 2) / params.d_f));
 
 // --- GUI ---
 const gui = new GUI({ title: 'Light Field Settings' });
 
 let activeCamController;
+let widthController;
+let angleController;
 
 const updateArray = () => {
+    // Keep width in sync with angle & depth so both controls stay consistent
+    params.W_array = 2 * params.d_f * Math.tan(THREE.MathUtils.degToRad(params.arrayAngleDeg) / 2);
+    if (widthController) widthController.updateDisplay();
+
     // Clamp active index
     if (params.activeCameraIndex >= params.N) {
         params.activeCameraIndex = params.N - 1;
@@ -124,8 +142,23 @@ const updateArray = () => {
 };
 
 gui.add(params, 'N', 1, 100, 1).name('Camera Count').onChange(updateArray);
-gui.add(params, 'd_f', 1, 50).name('Focal Dist (df)').onChange(updateArray);
-gui.add(params, 'W_array', 0.1, 20).name('Array Width').onChange(updateArray);
+gui.add(params, 'd_f', 1, 50).name('Focal Dist (df)').onChange(() => {
+    // Keep width consistent with angle when depth changes
+    params.W_array = 2 * params.d_f * Math.tan(THREE.MathUtils.degToRad(params.arrayAngleDeg) / 2);
+    if (widthController) widthController.updateDisplay();
+    updateArray();
+});
+widthController = gui.add(params, 'W_array', 0.1, 20).name('Array Width').onChange(() => {
+    // Changing width back-computes angle
+    params.arrayAngleDeg = THREE.MathUtils.radToDeg(2 * Math.atan((params.W_array / 2) / params.d_f));
+    if (angleController) angleController.updateDisplay();
+    updateArray();
+});
+angleController = gui.add(params, 'arrayAngleDeg', 1, 170).name('Array Span Angle').onChange(() => {
+    params.W_array = 2 * params.d_f * Math.tan(THREE.MathUtils.degToRad(params.arrayAngleDeg) / 2);
+    if (widthController) widthController.updateDisplay();
+    updateArray();
+});
 gui.add(params, 'fov_s', 10, 120).name('Horizontal FOV').onChange(updateArray);
 gui.add(params, 'aspect', 0.1, 4).name('Aspect Ratio').onChange(updateArray);
 gui.add(params, 'd_cube', 0.1, 20).name('Display Cube Depth').onChange(updateArray);
@@ -133,6 +166,12 @@ gui.add(params, 'showFrustums').name('Show All Frustums').onChange(updateArray);
 gui.add(params, 'focalPlaneMode', ['ViewMap', 'Lit']).name('Focal Plane Mode').onChange(() => {
     lfArray.setFocalPlaneMode(params.focalPlaneMode);
 });
+
+const probeFolder = gui.addFolder('Probe Plane');
+probeFolder.add(params, 'showProbePlane').name('Show Probe Plane').onChange(updateArray);
+probeFolder.add(params, 'probePlaneZ', -40, 40).name('Probe Plane Z').onChange(updateArray);
+probeFolder.add(params, 'probeScale', 0.1, 3).name('Probe Plane Scale').onChange(updateArray);
+probeFolder.add(params, 'probeHitSize', 0.01, 0.5).name('Probe Hit Size').onChange(updateArray);
 
 const camFolder = gui.addFolder('Active Camera');
 activeCamController = camFolder.add(params, 'activeCameraIndex', 0, params.N - 1, 1).name('Index').onChange(() => {
