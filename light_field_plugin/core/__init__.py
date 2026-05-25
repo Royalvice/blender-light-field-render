@@ -12,6 +12,13 @@ from .math_utils import (
     degrees_to_radians,
     radians_to_degrees,
 )
+from .film_tiff import (
+    am_clustered_halftone,
+    fm_error_diffusion_halftone,
+    halftone_luma,
+    write_1bit_tiff,
+    write_halftoned_1bit_tiff,
+)
 
 __all__ = [
     "LightFieldControl",
@@ -25,4 +32,9 @@ __all__ = [
     "calculate_focal_plane_size",
     "degrees_to_radians",
     "radians_to_degrees",
+    "am_clustered_halftone",
+    "fm_error_diffusion_halftone",
+    "halftone_luma",
+    "write_1bit_tiff",
+    "write_halftoned_1bit_tiff",
 ]

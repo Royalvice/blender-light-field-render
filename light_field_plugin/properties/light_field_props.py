@@ -1,16 +1,14 @@
 # Light Field Properties
-# 光场属性定义 (Revised v2.2)
-#
-# 物理几何参数：N, d_f, θ_array (输入), D_cube
-# 相机内参：f_L, S_w
-# 计算值：W_array, Δx, FOV_x, W_f, H_f
+
+import time
 
 import bpy
 from bpy.props import (
-    IntProperty,
-    FloatProperty,
-    StringProperty,
     BoolProperty,
+    EnumProperty,
+    FloatProperty,
+    IntProperty,
+    StringProperty,
 )
 from bpy.types import PropertyGroup
 
@@ -18,65 +16,79 @@ from ..core.math_utils import (
     calculate_array_width,
     calculate_focal_plane_size,
     calculate_fov_from_focal_length,
-    degrees_to_radians,
     radians_to_degrees,
 )
 
 
+DEFERRED_APPLY_SECONDS = 0.35
+_deferred_apply_scheduled = False
+_last_dirty_time = 0.0
+
+
 def _get_control():
     from ..core.light_field_control import get_light_field_control
+
     return get_light_field_control()
 
 
-def update_camera_count(self, context):
-    control = _get_control()
-    if control.is_created:
-        control.update(camera_count=self.camera_count)
+def sync_render_resolution(scene):
+    props = scene.light_field_props
+    scene.render.resolution_x = int(props.resolution_x)
+    scene.render.resolution_y = int(props.resolution_y)
+    props.render_settings_dirty = False
+
+
+def _schedule_deferred_apply():
+    global _deferred_apply_scheduled, _last_dirty_time
+
+    _last_dirty_time = time.monotonic()
+    if _deferred_apply_scheduled:
+        return
+
+    _deferred_apply_scheduled = True
+    bpy.app.timers.register(_deferred_apply, first_interval=DEFERRED_APPLY_SECONDS)
+
+
+def _deferred_apply():
+    global _deferred_apply_scheduled
+
+    if time.monotonic() - _last_dirty_time < DEFERRED_APPLY_SECONDS:
+        return DEFERRED_APPLY_SECONDS
+
+    _deferred_apply_scheduled = False
+    scene = getattr(bpy.context, "scene", None)
+    if scene is None or not hasattr(scene, "light_field_props"):
+        return None
+
+    props = scene.light_field_props
+    if not props.auto_apply_parameters:
+        return None
+
+    if props.render_settings_dirty:
+        sync_render_resolution(scene)
+
+    if props.geometry_dirty:
+        from ..operators.create_ops import apply_light_field_parameters
+
+        apply_light_field_parameters(scene)
+
+    return None
+
+
+def mark_geometry_dirty(self, context):
+    self.geometry_dirty = True
     max_index = max(0, self.camera_count - 1)
     if self.active_camera_index > max_index:
         self["active_camera_index"] = max_index
 
-
-def update_focal_distance(self, context):
-    control = _get_control()
-    if control.is_created:
-        control.update(focal_distance=self.focal_distance)
-        control.update_visuals()
+    if self.auto_apply_parameters:
+        _schedule_deferred_apply()
 
 
-def update_opening_angle(self, context):
-    """阵列张角更新回调"""
-    control = _get_control()
-    if control.is_created:
-        control.update(opening_angle_deg=self.opening_angle)
-
-
-def update_focal_length(self, context):
-    control = _get_control()
-    if control.is_created:
-        control.update(focal_length_mm=self.focal_length)
-        control.update_visuals()
-
-
-def update_sensor_width(self, context):
-    control = _get_control()
-    if control.is_created:
-        control.update(sensor_width_mm=self.sensor_width)
-        control.update_visuals()
-
-
-def update_depth_range(self, context):
-    control = _get_control()
-    if control.is_created:
-        control.update_depth_box()
-
-
-def update_resolution(self, context):
-    context.scene.render.resolution_x = self.resolution_x
-    context.scene.render.resolution_y = self.resolution_y
-    control = _get_control()
-    if control.is_created:
-        control.update_visuals()
+def mark_render_settings_dirty(self, context):
+    self.render_settings_dirty = True
+    if self.auto_apply_parameters:
+        _schedule_deferred_apply()
 
 
 def update_active_camera(self, context):
@@ -84,151 +96,240 @@ def update_active_camera(self, context):
     if self.active_camera_index > max_index:
         self["active_camera_index"] = max_index
         return
+
     control = _get_control()
     if control.is_created:
         control.set_active_camera(self.active_camera_index)
 
 
 class LightFieldProperties(PropertyGroup):
-    """光场相机阵列属性组"""
-    
-    # ========== 物理几何参数 ==========
+    """Properties for the light-field camera-array add-on."""
+
     camera_count: IntProperty(
-        name="相机数量",
-        description="光场相机阵列中的相机总数 N",
+        name="Camera Count",
+        description="Total number of cameras/views in the light-field array",
         default=60,
         min=2,
         max=200,
-        update=update_camera_count
+        update=mark_geometry_dirty,
     )
-    
+
     focal_distance: FloatProperty(
-        name="焦平面距离",
-        description="相机阵列到焦平面的距离 d_f（米）",
+        name="Focal Distance",
+        description="Distance from the camera array to the focal plane, in meters",
         default=10.0,
         min=0.1,
         max=1000.0,
-        unit='LENGTH',
-        update=update_focal_distance
+        unit="LENGTH",
+        update=mark_geometry_dirty,
     )
-    
+
     opening_angle: FloatProperty(
-        name="阵列张角",
-        description="阵列覆盖的有效角度 θ_array（度）",
+        name="Opening Angle",
+        description="Effective angular coverage of the camera array, in degrees",
         default=11.4,
         min=0.1,
         max=120.0,
-        update=update_opening_angle
+        update=mark_geometry_dirty,
     )
-    
+
     depth_range: FloatProperty(
-        name="景深范围",
-        description="显示立方体的深度 D_cube（米）",
+        name="Depth Range",
+        description="Depth of the display volume around the focal plane, in meters",
         default=3.0,
         min=0.1,
         max=100.0,
-        unit='LENGTH',
-        update=update_depth_range
+        unit="LENGTH",
+        update=mark_geometry_dirty,
     )
-    
-    # ========== 相机内参 ==========
+
     focal_length: FloatProperty(
-        name="焦距",
-        description="镜头焦距 f_L（毫米）",
+        name="Focal Length",
+        description="Camera focal length f_L, in millimeters",
         default=50.0,
         min=1.0,
         max=500.0,
-        update=update_focal_length
+        update=mark_geometry_dirty,
     )
-    
+
     sensor_width: FloatProperty(
-        name="传感器宽度",
-        description="传感器物理宽度 S_w（毫米）",
+        name="Sensor Width",
+        description="Camera sensor width S_w, in millimeters",
         default=36.0,
         min=1.0,
         max=100.0,
-        update=update_sensor_width
+        update=mark_geometry_dirty,
     )
-    
-    # ========== 渲染设置 ==========
+
     resolution_x: IntProperty(
-        name="分辨率 X",
-        description="渲染输出的水平分辨率",
+        name="Width",
+        description="Output image width in pixels",
         default=1920,
         min=1,
         max=16384,
-        update=update_resolution
+        update=mark_render_settings_dirty,
     )
-    
+
     resolution_y: IntProperty(
-        name="分辨率 Y",
-        description="渲染输出的垂直分辨率",
+        name="Height",
+        description="Output image height in pixels",
         default=1080,
         min=1,
         max=16384,
-        update=update_resolution
+        update=mark_render_settings_dirty,
     )
-    
+
     output_path: StringProperty(
-        name="输出路径",
-        description="渲染结果保存路径",
+        name="Output Path",
+        description="Directory for rendered output",
         default="//light_field_output/",
-        subtype='DIR_PATH'
+        subtype="DIR_PATH",
     )
-    
-    # ========== 预览控制 ==========
+
+    output_file_format: EnumProperty(
+        name="Output Format",
+        description="Image format written by the light-field render operators",
+        items=[
+            ("PNG", "PNG", "Continuous-tone PNG output"),
+            ("TIFF", "TIFF", "Continuous-tone TIFF output from Blender"),
+            (
+                "FILM_TIFF",
+                "1-bit Film TIFF",
+                "Render a continuous source image, then export a halftoned 1-bit TIFF",
+            ),
+        ],
+        default="PNG",
+        update=mark_render_settings_dirty,
+    )
+
+    keep_continuous_source: BoolProperty(
+        name="Keep Continuous Source",
+        description="Keep the temporary continuous-tone PNG source used for 1-bit Film TIFF export",
+        default=False,
+        update=mark_render_settings_dirty,
+    )
+
+    film_halftone_method: EnumProperty(
+        name="Halftone Method",
+        description="Halftone strategy for 1-bit Film TIFF export",
+        items=[
+            ("FM", "FM / Error Diffusion", "Dispersed fixed-size dots; usually safer for lenticular/light-field work"),
+            ("AM", "AM / Clustered Dot", "Traditional clustered screen dots controlled by LPI and angle"),
+        ],
+        default="FM",
+        update=mark_render_settings_dirty,
+    )
+
+    film_lpi: IntProperty(
+        name="LPI",
+        description="Screen ruling for AM halftone, in lines per inch",
+        default=200,
+        min=30,
+        max=600,
+        update=mark_render_settings_dirty,
+    )
+
+    film_dpi: IntProperty(
+        name="DPI",
+        description="Film output resolution metadata and AM cell-size basis",
+        default=2400,
+        min=300,
+        max=9600,
+        update=mark_render_settings_dirty,
+    )
+
+    film_angle: FloatProperty(
+        name="Screen Angle",
+        description="AM halftone screen angle in degrees",
+        default=45.0,
+        min=-90.0,
+        max=90.0,
+        update=mark_render_settings_dirty,
+    )
+
+    film_dot_shape: EnumProperty(
+        name="Dot Shape",
+        description="AM halftone dot shape",
+        items=[
+            ("ROUND", "Round", "Round clustered dots"),
+            ("DIAMOND", "Diamond", "Diamond clustered dots"),
+            ("ELLIPSE", "Ellipse", "Elliptical clustered dots"),
+        ],
+        default="ROUND",
+        update=mark_render_settings_dirty,
+    )
+
+    film_gamma: FloatProperty(
+        name="Gamma",
+        description="Luminance gamma applied before 1-bit halftone conversion",
+        default=1.0,
+        min=0.1,
+        max=5.0,
+        update=mark_render_settings_dirty,
+    )
+
+    auto_apply_parameters: BoolProperty(
+        name="Auto Apply After Drag",
+        description="Apply changed camera-array parameters after slider dragging stops; disabled by default to avoid UI stalls",
+        default=False,
+    )
+
     active_camera_index: IntProperty(
-        name="当前相机",
-        description="当前激活的相机索引",
+        name="Active Camera",
+        description="Active camera/view index",
         default=30,
         min=0,
         soft_max=199,
-        update=update_active_camera
+        update=update_active_camera,
     )
-    
-    # ========== 渲染状态 ==========
-    is_rendering: BoolProperty(name="正在渲染", default=False)
-    render_progress: IntProperty(name="渲染进度", default=0, min=0)
-    render_info: StringProperty(name="渲染信息", default="")
-    render_elapsed_time: FloatProperty(name="已用时间", default=0.0, min=0.0)
-    render_start_time: FloatProperty(name="开始时间", default=0.0)
-    
-    # ========== 动画帧范围 ==========
+
+    is_rendering: BoolProperty(name="Rendering", default=False)
+    render_progress: IntProperty(name="Render Progress", default=0, min=0)
+    render_info: StringProperty(name="Render Info", default="")
+    render_elapsed_time: FloatProperty(name="Elapsed Time", default=0.0, min=0.0)
+    render_start_time: FloatProperty(name="Start Time", default=0.0)
+
+    geometry_dirty: BoolProperty(
+        name="Geometry Dirty",
+        default=False,
+        options={"HIDDEN"},
+    )
+
+    render_settings_dirty: BoolProperty(
+        name="Render Settings Dirty",
+        default=False,
+        options={"HIDDEN"},
+    )
+
     frame_start: IntProperty(
-        name="开始帧",
-        description="动画渲染的开始帧",
+        name="Frame Start",
+        description="First frame for animation rendering",
         default=1,
-        min=0
+        min=0,
     )
-    
+
     frame_end: IntProperty(
-        name="结束帧",
-        description="动画渲染的结束帧",
+        name="Frame End",
+        description="Last frame for animation rendering",
         default=250,
-        min=0
+        min=0,
     )
-    
-    # ========== 计算属性 ==========
+
     def get_array_width(self) -> float:
-        """获取阵列宽度（米）- 计算值"""
         return calculate_array_width(self.opening_angle, self.focal_distance)
-    
+
     def get_camera_spacing(self) -> float:
-        """获取相机间距（米）- 计算值"""
         if self.camera_count <= 1:
             return 0.0
-        array_width = self.get_array_width()
-        return array_width / (self.camera_count - 1)
-    
+        return self.get_array_width() / (self.camera_count - 1)
+
     def get_fov_x_deg(self) -> float:
-        """获取水平视场角（度）- 计算值"""
         fov_rad = calculate_fov_from_focal_length(self.focal_length, self.sensor_width)
         return radians_to_degrees(fov_rad)
-    
+
     def get_focal_plane_size(self) -> tuple:
-        """获取焦平面尺寸（米）- 计算值"""
         fov_rad = calculate_fov_from_focal_length(self.focal_length, self.sensor_width)
-        aspect = self.resolution_x / self.resolution_y if self.resolution_y > 0 else 16/9
+        aspect = self.resolution_x / self.resolution_y if self.resolution_y > 0 else 16 / 9
         return calculate_focal_plane_size(self.focal_distance, fov_rad, aspect)
 
 

@@ -11,6 +11,8 @@ The repository is now organized around the Blender add-on. The older Three.js vi
 - Visualizes the focal plane and display depth volume with non-rendered helper objects.
 - Supports single-frame rendering across all cameras.
 - Supports animation rendering across all cameras and a selected frame range.
+- Supports PNG, continuous TIFF, and halftoned 1-bit Film TIFF output.
+- Avoids UI stalls by deferring heavy camera-array updates while sliders are dragged.
 - Tracks render progress and can resume from existing output files.
 
 ## Requirements
@@ -23,7 +25,7 @@ The repository is now organized around the Blender add-on. The older Three.js vi
 Use the release ZIP asset named like:
 
 ```text
-light_field_render-v0.1.0.zip
+light_field_render-v0.1.5.zip
 ```
 
 Then install it in Blender:
@@ -54,9 +56,10 @@ utils/                   Auxiliary light-field image utilities and sample data
 3. Select the `Light Field` tab.
 4. Set camera count, focal plane distance, opening angle, focal length, and sensor width.
 5. Click `Create Light Field Camera`.
-6. Preview cameras with the active camera controls.
-7. Set an output directory.
-8. Run single-frame or animation rendering.
+6. If you change camera parameters after creation, click `Apply Camera Parameters`.
+7. Preview cameras with the active camera controls.
+8. Set an output directory and output format.
+9. Run single-frame or animation rendering.
 
 See [docs/USER_MANUAL.md](docs/USER_MANUAL.md) for the full workflow.
 
