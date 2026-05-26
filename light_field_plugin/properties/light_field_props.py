@@ -1,4 +1,4 @@
-# Light Field Properties
+# 光场插件属性定义。
 
 import time
 
@@ -106,8 +106,8 @@ class LightFieldProperties(PropertyGroup):
     """Properties for the light-field camera-array add-on."""
 
     camera_count: IntProperty(
-        name="Camera Count",
-        description="Total number of cameras/views in the light-field array",
+        name="相机数量",
+        description="光场阵列中的相机/视角总数",
         default=60,
         min=2,
         max=200,
@@ -115,8 +115,8 @@ class LightFieldProperties(PropertyGroup):
     )
 
     focal_distance: FloatProperty(
-        name="Focal Distance",
-        description="Distance from the camera array to the focal plane, in meters",
+        name="焦平面距离",
+        description="相机阵列到焦平面的距离，单位为米",
         default=10.0,
         min=0.1,
         max=1000.0,
@@ -125,8 +125,8 @@ class LightFieldProperties(PropertyGroup):
     )
 
     opening_angle: FloatProperty(
-        name="Opening Angle",
-        description="Effective angular coverage of the camera array, in degrees",
+        name="阵列张角",
+        description="相机阵列的有效水平角覆盖范围，单位为度",
         default=11.4,
         min=0.1,
         max=120.0,
@@ -134,8 +134,8 @@ class LightFieldProperties(PropertyGroup):
     )
 
     depth_range: FloatProperty(
-        name="Depth Range",
-        description="Depth of the display volume around the focal plane, in meters",
+        name="景深范围",
+        description="焦平面前后的显示深度体范围，单位为米",
         default=3.0,
         min=0.1,
         max=100.0,
@@ -144,8 +144,8 @@ class LightFieldProperties(PropertyGroup):
     )
 
     focal_length: FloatProperty(
-        name="Focal Length",
-        description="Camera focal length f_L, in millimeters",
+        name="焦距",
+        description="相机镜头焦距 f_L，单位为毫米",
         default=50.0,
         min=1.0,
         max=500.0,
@@ -153,8 +153,8 @@ class LightFieldProperties(PropertyGroup):
     )
 
     sensor_width: FloatProperty(
-        name="Sensor Width",
-        description="Camera sensor width S_w, in millimeters",
+        name="传感器宽度",
+        description="相机传感器宽度 S_w，单位为毫米",
         default=36.0,
         min=1.0,
         max=100.0,
@@ -162,8 +162,8 @@ class LightFieldProperties(PropertyGroup):
     )
 
     resolution_x: IntProperty(
-        name="Width",
-        description="Output image width in pixels",
+        name="宽度",
+        description="输出图像宽度，单位为像素",
         default=1920,
         min=1,
         max=16384,
@@ -171,8 +171,8 @@ class LightFieldProperties(PropertyGroup):
     )
 
     resolution_y: IntProperty(
-        name="Height",
-        description="Output image height in pixels",
+        name="高度",
+        description="输出图像高度，单位为像素",
         default=1080,
         min=1,
         max=16384,
@@ -180,22 +180,22 @@ class LightFieldProperties(PropertyGroup):
     )
 
     output_path: StringProperty(
-        name="Output Path",
-        description="Directory for rendered output",
+        name="输出路径",
+        description="渲染输出目录",
         default="//light_field_output/",
         subtype="DIR_PATH",
     )
 
     output_file_format: EnumProperty(
-        name="Output Format",
-        description="Image format written by the light-field render operators",
+        name="输出格式",
+        description="光场渲染输出的图像格式",
         items=[
-            ("PNG", "PNG", "Continuous-tone PNG output"),
-            ("TIFF", "TIFF", "Continuous-tone TIFF output from Blender"),
+            ("PNG", "PNG", "连续调 PNG 输出"),
+            ("TIFF", "TIFF", "Blender 输出的连续调 TIFF"),
             (
                 "FILM_TIFF",
-                "1-bit Film TIFF",
-                "Render a continuous source image, then export a halftoned 1-bit TIFF",
+                "1-bit 菲林 TIFF",
+                "先渲染连续调源图，再导出挂网后的 1-bit TIFF",
             ),
         ],
         default="PNG",
@@ -203,18 +203,18 @@ class LightFieldProperties(PropertyGroup):
     )
 
     keep_continuous_source: BoolProperty(
-        name="Keep Continuous Source",
-        description="Keep the temporary continuous-tone PNG source used for 1-bit Film TIFF export",
+        name="保留连续调源图",
+        description="保留用于生成 1-bit 菲林 TIFF 的临时连续调 PNG 源图",
         default=False,
         update=mark_render_settings_dirty,
     )
 
     film_halftone_method: EnumProperty(
-        name="Halftone Method",
-        description="Halftone strategy for 1-bit Film TIFF export",
+        name="挂网方式",
+        description="1-bit 菲林 TIFF 导出的挂网策略",
         items=[
-            ("FM", "FM / Error Diffusion", "Dispersed fixed-size dots; usually safer for lenticular/light-field work"),
-            ("AM", "AM / Clustered Dot", "Traditional clustered screen dots controlled by LPI and angle"),
+            ("FM", "FM / 误差扩散", "固定大小网点按密度分布，通常更适合光栅/光场流程"),
+            ("AM", "AM / 聚集网点", "传统调幅挂网，由 LPI、网角和网点形状控制"),
         ],
         default="FM",
         update=mark_render_settings_dirty,
@@ -222,7 +222,7 @@ class LightFieldProperties(PropertyGroup):
 
     film_lpi: IntProperty(
         name="LPI",
-        description="Screen ruling for AM halftone, in lines per inch",
+        description="AM 挂网线数，单位为每英寸线数",
         default=200,
         min=30,
         max=600,
@@ -231,7 +231,7 @@ class LightFieldProperties(PropertyGroup):
 
     film_dpi: IntProperty(
         name="DPI",
-        description="Film output resolution metadata and AM cell-size basis",
+        description="菲林输出分辨率元数据，也是 AM 网点单元尺寸的计算基础",
         default=2400,
         min=300,
         max=9600,
@@ -239,8 +239,8 @@ class LightFieldProperties(PropertyGroup):
     )
 
     film_angle: FloatProperty(
-        name="Screen Angle",
-        description="AM halftone screen angle in degrees",
+        name="网角",
+        description="AM 挂网角度，单位为度",
         default=45.0,
         min=-90.0,
         max=90.0,
@@ -248,12 +248,12 @@ class LightFieldProperties(PropertyGroup):
     )
 
     film_dot_shape: EnumProperty(
-        name="Dot Shape",
-        description="AM halftone dot shape",
+        name="网点形状",
+        description="AM 挂网的网点形状",
         items=[
-            ("ROUND", "Round", "Round clustered dots"),
-            ("DIAMOND", "Diamond", "Diamond clustered dots"),
-            ("ELLIPSE", "Ellipse", "Elliptical clustered dots"),
+            ("ROUND", "圆形", "圆形聚集网点"),
+            ("DIAMOND", "菱形", "菱形聚集网点"),
+            ("ELLIPSE", "椭圆", "椭圆形聚集网点"),
         ],
         default="ROUND",
         update=mark_render_settings_dirty,
@@ -261,7 +261,7 @@ class LightFieldProperties(PropertyGroup):
 
     film_gamma: FloatProperty(
         name="Gamma",
-        description="Luminance gamma applied before 1-bit halftone conversion",
+        description="1-bit 挂网转换前应用的亮度 Gamma 校正",
         default=1.0,
         min=0.1,
         max=5.0,
@@ -269,48 +269,48 @@ class LightFieldProperties(PropertyGroup):
     )
 
     auto_apply_parameters: BoolProperty(
-        name="Auto Apply After Drag",
-        description="Apply changed camera-array parameters after slider dragging stops; disabled by default to avoid UI stalls",
+        name="拖动结束后自动应用",
+        description="滑条拖动停止后自动应用相机阵列参数；默认关闭以避免界面卡顿",
         default=False,
     )
 
     active_camera_index: IntProperty(
-        name="Active Camera",
-        description="Active camera/view index",
+        name="当前相机",
+        description="当前激活的相机/视角序号",
         default=30,
         min=0,
         soft_max=199,
         update=update_active_camera,
     )
 
-    is_rendering: BoolProperty(name="Rendering", default=False)
-    render_progress: IntProperty(name="Render Progress", default=0, min=0)
-    render_info: StringProperty(name="Render Info", default="")
-    render_elapsed_time: FloatProperty(name="Elapsed Time", default=0.0, min=0.0)
-    render_start_time: FloatProperty(name="Start Time", default=0.0)
+    is_rendering: BoolProperty(name="正在渲染", default=False)
+    render_progress: IntProperty(name="渲染进度", default=0, min=0)
+    render_info: StringProperty(name="渲染信息", default="")
+    render_elapsed_time: FloatProperty(name="已用时间", default=0.0, min=0.0)
+    render_start_time: FloatProperty(name="开始时间", default=0.0)
 
     geometry_dirty: BoolProperty(
-        name="Geometry Dirty",
+        name="几何参数待更新",
         default=False,
         options={"HIDDEN"},
     )
 
     render_settings_dirty: BoolProperty(
-        name="Render Settings Dirty",
+        name="输出设置待更新",
         default=False,
         options={"HIDDEN"},
     )
 
     frame_start: IntProperty(
-        name="Frame Start",
-        description="First frame for animation rendering",
+        name="开始帧",
+        description="动画渲染的第一帧",
         default=1,
         min=0,
     )
 
     frame_end: IntProperty(
-        name="Frame End",
-        description="Last frame for animation rendering",
+        name="结束帧",
+        description="动画渲染的最后一帧",
         default=250,
         min=0,
     )

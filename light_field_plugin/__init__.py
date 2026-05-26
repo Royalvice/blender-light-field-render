@@ -4,18 +4,18 @@
 bl_info = {
     "name": "Light Field Render",
     "author": "Light Field Studio",
-    "version": (0, 1, 6),
+    "version": (0, 1, 7),
     "blender": (4, 2, 0),
-    "location": "View3D > Sidebar > Light Field",
-    "description": "面向光场显示屏的渲染插件，支持离轴透视相机阵列",
+    "location": "3D 视图 > 侧边栏 > 光场",
+    "description": "面向光场显示与多视角输出的渲染插件，支持离轴透视相机阵列",
     "category": "Render",
 }
 
 import bpy
 
-from . import properties
 from . import operators
 from . import panels
+from . import properties
 
 
 def register():

@@ -1,4 +1,4 @@
-# Render operators.
+# 渲染操作。
 
 from __future__ import annotations
 
@@ -222,8 +222,8 @@ def _render_animation_to_dir(context, props, camera_dir: str, frame_start: int, 
 
 class LIGHTFIELD_OT_render_frame(Operator):
     bl_idname = "lightfield.render_frame"
-    bl_label = "Render Single Frame"
-    bl_description = "Render the current frame from every light-field camera"
+    bl_label = "渲染当前帧"
+    bl_description = "使用每台光场相机渲染当前帧"
     bl_options = {"REGISTER"}
 
     _original_camera = None
@@ -233,10 +233,10 @@ class LIGHTFIELD_OT_render_frame(Operator):
         control = get_light_field_control()
 
         if not control.is_created:
-            self.report({"ERROR"}, "Create the light-field camera system first")
+            self.report({"ERROR"}, "请先创建光场相机系统")
             return {"CANCELLED"}
         if props.is_rendering:
-            self.report({"WARNING"}, "A render task is already running")
+            self.report({"WARNING"}, "已有渲染任务正在运行")
             return {"CANCELLED"}
 
         if props.geometry_dirty:
@@ -246,7 +246,7 @@ class LIGHTFIELD_OT_render_frame(Operator):
 
         output_path = bpy.path.abspath(props.output_path)
         if not output_path:
-            self.report({"ERROR"}, "Set an output path first")
+            self.report({"ERROR"}, "请先设置输出路径")
             return {"CANCELLED"}
 
         frame = context.scene.frame_current
@@ -255,7 +255,7 @@ class LIGHTFIELD_OT_render_frame(Operator):
 
         start_index = self._detect_render_progress(frame_dir, props.camera_count, props)
         if start_index >= props.camera_count:
-            self.report({"INFO"}, "This frame is already fully rendered")
+            self.report({"INFO"}, "当前帧已全部渲染")
             return {"FINISHED"}
 
         captured = _capture_render_settings(context.scene)
@@ -279,9 +279,9 @@ class LIGHTFIELD_OT_render_frame(Operator):
                 if completed > 0:
                     avg_time = elapsed / completed
                     remaining = avg_time * (total - cam_idx)
-                    props.render_info = f"Camera {cam_idx + 1}/{total} | Remaining ~{format_time(remaining)}"
+                    props.render_info = f"相机 {cam_idx + 1}/{total} | 剩余约 {format_time(remaining)}"
                 else:
-                    props.render_info = f"Camera {cam_idx + 1}/{total}"
+                    props.render_info = f"相机 {cam_idx + 1}/{total}"
 
                 props.render_progress = cam_idx
                 _safe_redraw()
@@ -294,12 +294,12 @@ class LIGHTFIELD_OT_render_frame(Operator):
             props.is_rendering = False
             props.render_progress = total
             props.render_elapsed_time = total_time
-            props.render_info = f"Done in {format_time(total_time)}"
+            props.render_info = f"完成，用时 {format_time(total_time)}"
             if self._original_camera:
                 context.scene.camera = self._original_camera
             _restore_render_settings(context.scene, captured)
 
-        self.report({"INFO"}, f"Rendered {total} cameras in {format_time(props.render_elapsed_time)}")
+        self.report({"INFO"}, f"已渲染 {total} 台相机，用时 {format_time(props.render_elapsed_time)}")
         return {"FINISHED"}
 
     def _detect_render_progress(self, output_dir: str, total_cameras: int, props) -> int:
@@ -315,8 +315,8 @@ class LIGHTFIELD_OT_render_frame(Operator):
 
 class LIGHTFIELD_OT_render_animation(Operator):
     bl_idname = "lightfield.render_animation"
-    bl_label = "Render Animation"
-    bl_description = "Render the selected frame range from every light-field camera"
+    bl_label = "渲染动画"
+    bl_description = "使用每台光场相机渲染选定帧范围"
     bl_options = {"REGISTER"}
 
     _original_camera = None
@@ -326,10 +326,10 @@ class LIGHTFIELD_OT_render_animation(Operator):
         control = get_light_field_control()
 
         if not control.is_created:
-            self.report({"ERROR"}, "Create the light-field camera system first")
+            self.report({"ERROR"}, "请先创建光场相机系统")
             return {"CANCELLED"}
         if props.is_rendering:
-            self.report({"WARNING"}, "A render task is already running")
+            self.report({"WARNING"}, "已有渲染任务正在运行")
             return {"CANCELLED"}
 
         if props.geometry_dirty:
@@ -339,14 +339,14 @@ class LIGHTFIELD_OT_render_animation(Operator):
 
         output_path = bpy.path.abspath(props.output_path)
         if not output_path:
-            self.report({"ERROR"}, "Set an output path first")
+            self.report({"ERROR"}, "请先设置输出路径")
             return {"CANCELLED"}
 
         os.makedirs(output_path, exist_ok=True)
         frame_start = props.frame_start
         frame_end = props.frame_end
         if frame_end < frame_start:
-            self.report({"ERROR"}, "Frame End must be greater than or equal to Frame Start")
+            self.report({"ERROR"}, "结束帧必须大于或等于开始帧")
             return {"CANCELLED"}
 
         start_camera = self._detect_animation_progress(
@@ -357,7 +357,7 @@ class LIGHTFIELD_OT_render_animation(Operator):
             props,
         )
         if start_camera >= props.camera_count:
-            self.report({"INFO"}, "Animation is already fully rendered")
+            self.report({"INFO"}, "动画已全部渲染")
             return {"FINISHED"}
 
         captured = _capture_render_settings(context.scene)
@@ -387,11 +387,11 @@ class LIGHTFIELD_OT_render_animation(Operator):
                     avg_time = elapsed / completed
                     remaining = avg_time * (total_cameras - cam_idx)
                     props.render_info = (
-                        f"Camera {cam_idx + 1}/{total_cameras} | "
-                        f"Frames {frame_start}-{frame_end} | Remaining ~{format_time(remaining)}"
+                        f"相机 {cam_idx + 1}/{total_cameras} | "
+                        f"帧 {frame_start}-{frame_end} | 剩余约 {format_time(remaining)}"
                     )
                 else:
-                    props.render_info = f"Camera {cam_idx + 1}/{total_cameras} | Frames {frame_start}-{frame_end}"
+                    props.render_info = f"相机 {cam_idx + 1}/{total_cameras} | 帧 {frame_start}-{frame_end}"
 
                 props.render_progress = cam_idx
                 _safe_redraw()
@@ -405,7 +405,7 @@ class LIGHTFIELD_OT_render_animation(Operator):
             props.is_rendering = False
             props.render_progress = total_cameras
             props.render_elapsed_time = total_time
-            props.render_info = f"Done in {format_time(total_time)}"
+            props.render_info = f"完成，用时 {format_time(total_time)}"
 
             context.scene.frame_start = original_frame_start
             context.scene.frame_end = original_frame_end
@@ -413,7 +413,7 @@ class LIGHTFIELD_OT_render_animation(Operator):
                 context.scene.camera = self._original_camera
             _restore_render_settings(context.scene, captured)
 
-        self.report({"INFO"}, f"Rendered {total_cameras} cameras in {format_time(props.render_elapsed_time)}")
+        self.report({"INFO"}, f"已渲染 {total_cameras} 台相机，用时 {format_time(props.render_elapsed_time)}")
         return {"FINISHED"}
 
     def _detect_animation_progress(
@@ -440,15 +440,15 @@ class LIGHTFIELD_OT_render_animation(Operator):
 
 class LIGHTFIELD_OT_stop_render(Operator):
     bl_idname = "lightfield.stop_render"
-    bl_label = "Stop Render"
-    bl_description = "Stop the current render task after the active camera finishes"
+    bl_label = "停止渲染"
+    bl_description = "当前相机渲染完成后停止渲染任务"
     bl_options = {"REGISTER"}
 
     def execute(self, context):
         props = context.scene.light_field_props
         if not props.is_rendering:
-            self.report({"WARNING"}, "No render task is running")
+            self.report({"WARNING"}, "当前没有正在运行的渲染任务")
             return {"CANCELLED"}
         props.is_rendering = False
-        self.report({"INFO"}, "Stopping render task")
+        self.report({"INFO"}, "正在停止渲染任务")
         return {"FINISHED"}

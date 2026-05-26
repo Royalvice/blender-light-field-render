@@ -89,6 +89,24 @@ def assert_1bit_tiff(path: Path, width: int, height: int):
     assert (tags[277][2] & 0xFFFF) == 1, tags[277]
 
 
+def assert_localized_ui(scene):
+    from light_field_plugin.operators.create_ops import LIGHTFIELD_OT_create
+    from light_field_plugin.operators.render_ops import LIGHTFIELD_OT_render_animation, LIGHTFIELD_OT_render_frame
+    from light_field_plugin.panels.main_panel import LIGHTFIELD_PT_main, LIGHTFIELD_PT_render_settings
+
+    assert LIGHTFIELD_PT_main.bl_category == "光场", LIGHTFIELD_PT_main.bl_category
+    assert LIGHTFIELD_PT_main.bl_label == "光场相机阵列", LIGHTFIELD_PT_main.bl_label
+    assert LIGHTFIELD_PT_render_settings.bl_label == "输出设置", LIGHTFIELD_PT_render_settings.bl_label
+    assert LIGHTFIELD_OT_create.bl_label == "创建光场相机", LIGHTFIELD_OT_create.bl_label
+    assert LIGHTFIELD_OT_render_frame.bl_label == "渲染当前帧", LIGHTFIELD_OT_render_frame.bl_label
+    assert LIGHTFIELD_OT_render_animation.bl_label == "渲染动画", LIGHTFIELD_OT_render_animation.bl_label
+
+    props_rna = scene.light_field_props.bl_rna.properties
+    assert props_rna["output_file_format"].name == "输出格式", props_rna["output_file_format"].name
+    assert props_rna["auto_apply_parameters"].name == "拖动结束后自动应用", props_rna["auto_apply_parameters"].name
+    assert props_rna["output_file_format"].enum_items["FILM_TIFF"].name == "1-bit 菲林 TIFF"
+
+
 def main():
     plugin_source = configure_plugin_import_path()
     import light_field_plugin
@@ -98,6 +116,7 @@ def main():
     light_field_plugin.register()
 
     scene = bpy.context.scene
+    assert_localized_ui(scene)
     scene.render.engine = "BLENDER_WORKBENCH"
     props = scene.light_field_props
     props.camera_count = 3

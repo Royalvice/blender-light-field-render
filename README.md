@@ -25,7 +25,7 @@ The repository is now organized around the Blender add-on. The older Three.js vi
 Use the release ZIP asset named like:
 
 ```text
-light_field_render-v0.1.6.zip
+light_field_render-v0.1.7.zip
 ```
 
 Then install it in Blender:
@@ -35,7 +35,7 @@ Then install it in Blender:
 3. Click `Install...`.
 4. Select the release ZIP file.
 5. Enable `Light Field Render`.
-6. Open the 3D Viewport sidebar and use the `Light Field` tab.
+6. Open the 3D Viewport sidebar and use the `光场` tab.
 
 For development, you can also install the add-on by pointing Blender at the `light_field_plugin/` package in this repository.
 
@@ -53,13 +53,13 @@ utils/                   Auxiliary light-field image utilities and sample data
 
 1. Enable the add-on in Blender.
 2. Open the 3D Viewport sidebar with `N`.
-3. Select the `Light Field` tab.
+3. Select the `光场` tab.
 4. Set camera count, focal plane distance, opening angle, focal length, and sensor width.
-5. Click `Create Light Field Camera`.
-6. If you change camera parameters after creation, click `Apply Camera Parameters`.
+5. Click `创建光场相机`.
+6. If you change camera parameters after creation, click `应用相机参数`.
 7. Preview cameras with the active camera controls.
-8. Set an output directory and output format.
-9. Run single-frame or animation rendering.
+8. Set an output directory and output format. The output format selector is labeled `输出格式`.
+9. Run single-frame or animation rendering with `渲染当前帧` or `渲染动画`.
 
 See [docs/USER_MANUAL.md](docs/USER_MANUAL.md) for the full workflow.
 

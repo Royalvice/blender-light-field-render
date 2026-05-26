@@ -1,4 +1,4 @@
-# Create and update operators.
+# 创建和更新操作。
 
 import bpy
 from bpy.types import Operator
@@ -36,8 +36,8 @@ def apply_light_field_parameters(scene) -> bool:
 
 class LIGHTFIELD_OT_create(Operator):
     bl_idname = "lightfield.create"
-    bl_label = "Create Light Field Camera"
-    bl_description = "Create the light-field camera-array system"
+    bl_label = "创建光场相机"
+    bl_description = "创建光场相机阵列系统"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -45,7 +45,7 @@ class LIGHTFIELD_OT_create(Operator):
         control = get_light_field_control()
 
         if control.is_created:
-            self.report({"WARNING"}, "Light-field camera system already exists")
+            self.report({"WARNING"}, "光场相机系统已存在")
             return {"CANCELLED"}
 
         apply_output_settings(context.scene)
@@ -62,55 +62,55 @@ class LIGHTFIELD_OT_create(Operator):
             props.active_camera_index = props.camera_count // 2
             props.geometry_dirty = False
             props.render_settings_dirty = False
-            self.report({"INFO"}, f"Created {props.camera_count} light-field cameras")
+            self.report({"INFO"}, f"已创建 {props.camera_count} 台光场相机")
             return {"FINISHED"}
 
-        self.report({"ERROR"}, "Failed to create light-field camera system")
+        self.report({"ERROR"}, "创建光场相机系统失败")
         return {"CANCELLED"}
 
 
 class LIGHTFIELD_OT_delete(Operator):
     bl_idname = "lightfield.delete"
-    bl_label = "Delete Light Field Camera"
-    bl_description = "Delete the light-field camera-array system"
+    bl_label = "删除光场相机"
+    bl_description = "删除光场相机阵列系统"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
         control = get_light_field_control()
 
         if not control.is_created:
-            self.report({"WARNING"}, "No light-field camera system found")
+            self.report({"WARNING"}, "未找到光场相机系统")
             return {"CANCELLED"}
 
         control.delete()
         reset_light_field_control()
         context.scene.light_field_props.geometry_dirty = False
-        self.report({"INFO"}, "Deleted light-field camera system")
+        self.report({"INFO"}, "已删除光场相机系统")
         return {"FINISHED"}
 
 
 class LIGHTFIELD_OT_update(Operator):
     bl_idname = "lightfield.update"
-    bl_label = "Apply Camera Parameters"
-    bl_description = "Apply pending light-field camera-array parameter changes"
+    bl_label = "应用相机参数"
+    bl_description = "应用待更新的光场相机阵列参数"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
         if not apply_light_field_parameters(context.scene):
-            self.report({"WARNING"}, "Create the light-field camera system first")
+            self.report({"WARNING"}, "请先创建光场相机系统")
             return {"CANCELLED"}
 
-        self.report({"INFO"}, "Applied light-field camera parameters")
+        self.report({"INFO"}, "已应用光场相机参数")
         return {"FINISHED"}
 
 
 class LIGHTFIELD_OT_apply_render_settings(Operator):
     bl_idname = "lightfield.apply_render_settings"
-    bl_label = "Apply Output Settings"
-    bl_description = "Apply output resolution settings to the Blender scene"
+    bl_label = "应用输出设置"
+    bl_description = "将输出分辨率设置应用到 Blender 场景，并刷新辅助显示"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
         apply_output_settings(context.scene)
-        self.report({"INFO"}, "Applied output resolution")
+        self.report({"INFO"}, "已应用输出分辨率")
         return {"FINISHED"}

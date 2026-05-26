@@ -38,27 +38,27 @@ Use this checklist when publishing a GitHub Release.
 Recommended tag format:
 
 ```text
-v0.1.6
+v0.1.7
 ```
 
 Recommended title:
 
 ```text
-Light Field Render v0.1.6
+Light Field Render v0.1.7
 ```
 
 Release asset:
 
 ```text
-dist/light_field_render-v0.1.6.zip
+dist/light_field_render-v0.1.7.zip
 ```
 
 Suggested release notes:
 
 ```markdown
-## Light Field Render v0.1.6
+## Light Field Render v0.1.7
 
-Output settings refresh release.
+Chinese panel localization release.
 
 ### Features
 
@@ -72,8 +72,9 @@ Output settings refresh release.
 - Adds FM error-diffusion and AM clustered-dot halftone controls.
 - Adds automated unit tests and Blender background integration test coverage.
 - Refreshes focal-plane and depth-box helper visuals when output resolution settings are applied.
+- Localizes the Blender sidebar panels, property labels, operators, and status messages to Chinese.
 
 ### Installation
 
-Download `light_field_render-v0.1.6.zip`, then install it from Blender via `Edit > Preferences > Add-ons > Install...`.
+Download `light_field_render-v0.1.7.zip`, then install it from Blender via `Edit > Preferences > Add-ons > Install...`.
 ```
