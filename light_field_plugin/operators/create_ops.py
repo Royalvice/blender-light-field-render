@@ -7,13 +7,20 @@ from ..core.light_field_control import get_light_field_control, reset_light_fiel
 from ..properties.light_field_props import sync_render_resolution
 
 
+def apply_output_settings(scene) -> None:
+    sync_render_resolution(scene)
+    control = get_light_field_control()
+    if control.is_created:
+        control.update_visuals()
+
+
 def apply_light_field_parameters(scene) -> bool:
     props = scene.light_field_props
     control = get_light_field_control()
     if not control.is_created:
         return False
 
-    sync_render_resolution(scene)
+    apply_output_settings(scene)
     control.update(
         camera_count=props.camera_count,
         focal_distance=props.focal_distance,
@@ -41,7 +48,7 @@ class LIGHTFIELD_OT_create(Operator):
             self.report({"WARNING"}, "Light-field camera system already exists")
             return {"CANCELLED"}
 
-        sync_render_resolution(context.scene)
+        apply_output_settings(context.scene)
         success = control.create(
             camera_count=props.camera_count,
             focal_distance=props.focal_distance,
@@ -104,6 +111,6 @@ class LIGHTFIELD_OT_apply_render_settings(Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        sync_render_resolution(context.scene)
+        apply_output_settings(context.scene)
         self.report({"INFO"}, "Applied output resolution")
         return {"FINISHED"}

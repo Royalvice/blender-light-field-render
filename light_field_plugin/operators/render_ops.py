@@ -13,7 +13,7 @@ from bpy.types import Operator
 from ..core.film_tiff import write_halftoned_1bit_tiff
 from ..core.light_field_control import get_light_field_control
 from ..properties.light_field_props import sync_render_resolution
-from .create_ops import apply_light_field_parameters
+from .create_ops import apply_light_field_parameters, apply_output_settings
 
 
 FORMAT_EXTENSIONS = {
@@ -169,7 +169,7 @@ def _export_film_tiff_from_source(source_path: str, output_path: str, props) -> 
 
 def _render_still_to_path(context, props, output_base: str) -> str:
     scene = context.scene
-    sync_render_resolution(scene)
+    apply_output_settings(scene)
 
     if props.output_file_format == "FILM_TIFF":
         source_path = output_base + "_continuous.png"
@@ -196,7 +196,7 @@ def _render_still_to_path(context, props, output_base: str) -> str:
 
 def _render_animation_to_dir(context, props, camera_dir: str, frame_start: int, frame_end: int) -> None:
     scene = context.scene
-    sync_render_resolution(scene)
+    apply_output_settings(scene)
 
     if props.output_file_format == "FILM_TIFF":
         source_prefix = os.path.join(camera_dir, "frame_continuous_")
@@ -242,7 +242,7 @@ class LIGHTFIELD_OT_render_frame(Operator):
         if props.geometry_dirty:
             apply_light_field_parameters(context.scene)
         else:
-            sync_render_resolution(context.scene)
+            apply_output_settings(context.scene)
 
         output_path = bpy.path.abspath(props.output_path)
         if not output_path:
@@ -335,7 +335,7 @@ class LIGHTFIELD_OT_render_animation(Operator):
         if props.geometry_dirty:
             apply_light_field_parameters(context.scene)
         else:
-            sync_render_resolution(context.scene)
+            apply_output_settings(context.scene)
 
         output_path = bpy.path.abspath(props.output_path)
         if not output_path:

@@ -38,27 +38,27 @@ Use this checklist when publishing a GitHub Release.
 Recommended tag format:
 
 ```text
-v0.1.5
+v0.1.6
 ```
 
 Recommended title:
 
 ```text
-Light Field Render v0.1.5
+Light Field Render v0.1.6
 ```
 
 Release asset:
 
 ```text
-dist/light_field_render-v0.1.5.zip
+dist/light_field_render-v0.1.6.zip
 ```
 
 Suggested release notes:
 
 ```markdown
-## Light Field Render v0.1.5
+## Light Field Render v0.1.6
 
-Stability and film-output release.
+Output settings refresh release.
 
 ### Features
 
@@ -71,8 +71,9 @@ Stability and film-output release.
 - Adds PNG, continuous TIFF, and halftoned 1-bit Film TIFF output modes.
 - Adds FM error-diffusion and AM clustered-dot halftone controls.
 - Adds automated unit tests and Blender background integration test coverage.
+- Refreshes focal-plane and depth-box helper visuals when output resolution settings are applied.
 
 ### Installation
 
-Download `light_field_render-v0.1.5.zip`, then install it from Blender via `Edit > Preferences > Add-ons > Install...`.
+Download `light_field_render-v0.1.6.zip`, then install it from Blender via `Edit > Preferences > Add-ons > Install...`.
 ```

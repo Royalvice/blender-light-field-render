@@ -8,9 +8,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class PluginStaticTests(unittest.TestCase):
-    def test_version_is_0_1_5(self):
+    def test_version_is_0_1_6(self):
         init_text = (REPO_ROOT / "light_field_plugin" / "__init__.py").read_text(encoding="utf-8")
-        self.assertIn('"version": (0, 1, 5)', init_text)
+        self.assertIn('"version": (0, 1, 6)', init_text)
 
     def test_slider_callbacks_do_not_directly_update_camera_system(self):
         text = (REPO_ROOT / "light_field_plugin" / "properties" / "light_field_props.py").read_text(encoding="utf-8")
@@ -40,6 +40,11 @@ class PluginStaticTests(unittest.TestCase):
     def test_old_live_update_callbacks_removed(self):
         text = (REPO_ROOT / "light_field_plugin" / "properties" / "light_field_props.py").read_text(encoding="utf-8")
         self.assertNotRegex(text, r"def update_(camera_count|focal_distance|opening_angle|focal_length|sensor_width|resolution)")
+
+    def test_apply_output_settings_refreshes_visual_helpers(self):
+        text = (REPO_ROOT / "light_field_plugin" / "operators" / "create_ops.py").read_text(encoding="utf-8")
+        self.assertIn("def apply_output_settings", text)
+        self.assertIn("control.update_visuals()", text)
 
 
 if __name__ == "__main__":

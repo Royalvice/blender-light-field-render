@@ -41,6 +41,7 @@ def load_render_ops_module():
 
     create_ops_module = types.ModuleType("light_field_plugin.operators.create_ops")
     create_ops_module.apply_light_field_parameters = lambda scene: True
+    create_ops_module.apply_output_settings = lambda scene: None
     sys.modules["light_field_plugin.operators.create_ops"] = create_ops_module
 
     path = REPO_ROOT / "light_field_plugin" / "operators" / "render_ops.py"

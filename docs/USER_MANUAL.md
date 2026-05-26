@@ -7,7 +7,7 @@ This manual describes how to install and use the `Light Field Render` Blender ad
 Download the add-on ZIP from the GitHub Release page. The file should be named like:
 
 ```text
-light_field_render-v0.1.5.zip
+light_field_render-v0.1.6.zip
 ```
 
 Install it in Blender:
