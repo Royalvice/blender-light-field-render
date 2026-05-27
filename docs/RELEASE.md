@@ -32,33 +32,34 @@ Use this checklist when publishing a GitHub Release.
 6. Install the generated ZIP in Blender.
 7. Confirm the add-on enables successfully.
 8. Create a small camera array and render PNG, continuous TIFF, and 1-bit Film TIFF outputs.
+9. Generate current-frame final delivery output and verify `interlaced.tif`, `interlaced_preview.png`, `film_1bit.tif`, and `delivery_manifest.json`.
 
 ## GitHub Release
 
 Recommended tag format:
 
 ```text
-v0.1.7
+v0.1.8
 ```
 
 Recommended title:
 
 ```text
-Light Field Render v0.1.7
+Light Field Render v0.1.8
 ```
 
 Release asset:
 
 ```text
-dist/light_field_render-v0.1.7.zip
+dist/light_field_render-v0.1.8.zip
 ```
 
 Suggested release notes:
 
 ```markdown
-## Light Field Render v0.1.7
+## Light Field Render v0.1.8
 
-Chinese panel localization release.
+Final delivery interlace output release.
 
 ### Features
 
@@ -73,8 +74,13 @@ Chinese panel localization release.
 - Adds automated unit tests and Blender background integration test coverage.
 - Refreshes focal-plane and depth-box helper visuals when output resolution settings are applied.
 - Localizes the Blender sidebar panels, property labels, operators, and status messages to Chinese.
+- Adds `最终交付输出` for current-frame delivery from physical size in mm plus PPI.
+- Generates full-size continuous interlaced TIFF, 2048px preview PNG, single-channel 1-bit film TIFF, and JSON manifest.
+- Keeps Blender source-view resolution separate from final delivery pixel size to avoid rendering every camera at print resolution.
+- Reuses or renders current-frame source PNG views before interlacing.
+- Adds large-output confirmation, source-upscale warning, progress/status reporting, and error-log output.
 
 ### Installation
 
-Download `light_field_render-v0.1.7.zip`, then install it from Blender via `Edit > Preferences > Add-ons > Install...`.
+Download `light_field_render-v0.1.8.zip`, then install it from Blender via `Edit > Preferences > Add-ons > Install...`.
 ```

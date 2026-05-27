@@ -1,5 +1,6 @@
 # 光场插件属性定义。
 
+import math
 import time
 
 import bpy
@@ -17,6 +18,13 @@ from ..core.math_utils import (
     calculate_focal_plane_size,
     calculate_fov_from_focal_length,
     radians_to_degrees,
+)
+from ..core.delivery import (
+    LARGE_OUTPUT_PIXELS,
+    SOURCE_UPSCALE_WARNING_FACTOR,
+    calculate_delivery_pixels,
+    has_source_upscale_warning,
+    is_large_output,
 )
 
 
@@ -315,6 +323,81 @@ class LightFieldProperties(PropertyGroup):
         min=0,
     )
 
+    delivery_width_mm: FloatProperty(
+        name="交付宽度",
+        description="最终交织/菲林交付文件的物理宽度，单位为毫米",
+        default=0.0,
+        min=0.0,
+        precision=3,
+        subtype="DISTANCE",
+    )
+
+    delivery_height_mm: FloatProperty(
+        name="交付高度",
+        description="最终交织/菲林交付文件的物理高度，单位为毫米",
+        default=0.0,
+        min=0.0,
+        precision=3,
+        subtype="DISTANCE",
+    )
+
+    delivery_ppi: IntProperty(
+        name="PPI",
+        description="最终交付文件的像素密度；也会写入 TIFF DPI 元数据",
+        default=0,
+        min=0,
+        max=9600,
+    )
+
+    delivery_confirm_large_output: BoolProperty(
+        name="确认生成大图",
+        description="最终像素超过 100MP 时需要勾选此项才能生成",
+        default=False,
+    )
+
+    interlace_pe: FloatProperty(
+        name="PE",
+        description="交织公式原始 PE 参数，沿用现有 interlace_taichi.py 口径",
+        default=16.7240,
+        min=0.0001,
+        precision=4,
+    )
+
+    interlace_angle: FloatProperty(
+        name="Angle",
+        description="交织公式倾角，界面使用度，内部换算为弧度",
+        default=math.degrees(0.106395),
+        min=-89.0,
+        max=89.0,
+        precision=4,
+    )
+
+    interlace_offset: FloatProperty(
+        name="Offset",
+        description="交织公式原始 Offset 参数",
+        default=12.5,
+        precision=4,
+    )
+
+    interlace_reverse_views: BoolProperty(
+        name="反转视角顺序",
+        description="把 view 0..N-1 映射为 camera_N-1..camera_000",
+        default=False,
+    )
+
+    is_delivery_generating: BoolProperty(name="正在生成交付文件", default=False)
+    delivery_progress: IntProperty(name="交付进度", default=0, min=0)
+    delivery_progress_total: IntProperty(name="交付总量", default=0, min=0)
+    delivery_stage: StringProperty(name="交付阶段", default="")
+    delivery_info: StringProperty(name="交付信息", default="")
+    delivery_elapsed_time: FloatProperty(name="交付用时", default=0.0, min=0.0)
+    delivery_stop_requested: BoolProperty(
+        name="停止交付请求",
+        default=False,
+        options={"HIDDEN"},
+    )
+    delivery_last_output_dir: StringProperty(name="最近交付目录", default="")
+
     def get_array_width(self) -> float:
         return calculate_array_width(self.opening_angle, self.focal_distance)
 
@@ -331,6 +414,30 @@ class LightFieldProperties(PropertyGroup):
         fov_rad = calculate_fov_from_focal_length(self.focal_length, self.sensor_width)
         aspect = self.resolution_x / self.resolution_y if self.resolution_y > 0 else 16 / 9
         return calculate_focal_plane_size(self.focal_distance, fov_rad, aspect)
+
+    def get_delivery_pixel_size(self) -> tuple:
+        try:
+            return calculate_delivery_pixels(self.delivery_width_mm, self.delivery_height_mm, self.delivery_ppi)
+        except ValueError:
+            return 0, 0
+
+    def is_delivery_large_output(self) -> bool:
+        width, height = self.get_delivery_pixel_size()
+        if width <= 0 or height <= 0:
+            return False
+        return is_large_output(width, height, LARGE_OUTPUT_PIXELS)
+
+    def has_delivery_source_upscale_warning(self) -> bool:
+        width, height = self.get_delivery_pixel_size()
+        if width <= 0 or height <= 0:
+            return False
+        return has_source_upscale_warning(
+            width,
+            height,
+            self.resolution_x,
+            self.resolution_y,
+            SOURCE_UPSCALE_WARNING_FACTOR,
+        )
 
 
 def register():

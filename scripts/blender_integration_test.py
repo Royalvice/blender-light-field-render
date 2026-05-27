@@ -13,6 +13,7 @@ developer machine without manual UI interaction.
 from __future__ import annotations
 
 import os
+import json
 import struct
 import sys
 import tempfile
@@ -89,10 +90,25 @@ def assert_1bit_tiff(path: Path, width: int, height: int):
     assert (tags[277][2] & 0xFFFF) == 1, tags[277]
 
 
+def assert_rgb_tiff(path: Path, width: int, height: int):
+    tags = read_tiff_tags(path)
+    assert tags[256][2] == width, tags[256]
+    assert tags[257][2] == height, tags[257]
+    assert tags[258][0] == 3 and tags[258][1] == 3, tags[258]
+    assert (tags[259][2] & 0xFFFF) == 1, tags[259]
+    assert (tags[262][2] & 0xFFFF) == 2, tags[262]
+    assert (tags[277][2] & 0xFFFF) == 3, tags[277]
+
+
 def assert_localized_ui(scene):
     from light_field_plugin.operators.create_ops import LIGHTFIELD_OT_create
+    from light_field_plugin.operators.delivery_ops import LIGHTFIELD_OT_generate_delivery, LIGHTFIELD_OT_stop_delivery
     from light_field_plugin.operators.render_ops import LIGHTFIELD_OT_render_animation, LIGHTFIELD_OT_render_frame
-    from light_field_plugin.panels.main_panel import LIGHTFIELD_PT_main, LIGHTFIELD_PT_render_settings
+    from light_field_plugin.panels.main_panel import (
+        LIGHTFIELD_PT_delivery_output,
+        LIGHTFIELD_PT_main,
+        LIGHTFIELD_PT_render_settings,
+    )
 
     assert LIGHTFIELD_PT_main.bl_category == "光场", LIGHTFIELD_PT_main.bl_category
     assert LIGHTFIELD_PT_main.bl_label == "光场相机阵列", LIGHTFIELD_PT_main.bl_label
@@ -100,11 +116,15 @@ def assert_localized_ui(scene):
     assert LIGHTFIELD_OT_create.bl_label == "创建光场相机", LIGHTFIELD_OT_create.bl_label
     assert LIGHTFIELD_OT_render_frame.bl_label == "渲染当前帧", LIGHTFIELD_OT_render_frame.bl_label
     assert LIGHTFIELD_OT_render_animation.bl_label == "渲染动画", LIGHTFIELD_OT_render_animation.bl_label
+    assert LIGHTFIELD_PT_delivery_output.bl_label == "最终交付输出", LIGHTFIELD_PT_delivery_output.bl_label
+    assert LIGHTFIELD_OT_generate_delivery.bl_label == "生成当前帧交付文件", LIGHTFIELD_OT_generate_delivery.bl_label
+    assert LIGHTFIELD_OT_stop_delivery.bl_label == "停止交付生成", LIGHTFIELD_OT_stop_delivery.bl_label
 
     props_rna = scene.light_field_props.bl_rna.properties
     assert props_rna["output_file_format"].name == "输出格式", props_rna["output_file_format"].name
     assert props_rna["auto_apply_parameters"].name == "拖动结束后自动应用", props_rna["auto_apply_parameters"].name
     assert props_rna["output_file_format"].enum_items["FILM_TIFF"].name == "1-bit 菲林 TIFF"
+    assert props_rna["delivery_width_mm"].name == "交付宽度", props_rna["delivery_width_mm"].name
 
 
 def main():
@@ -159,6 +179,50 @@ def main():
     assert expected.exists(), f"Missing {expected}"
     assert_1bit_tiff(expected, 64, 48)
     assert not (Path(out_dir) / "camera_000" / "frame_continuous_0001.png").exists()
+
+    props.delivery_width_mm = 5.08
+    props.delivery_height_mm = 2.54
+    props.delivery_ppi = 100
+    props.delivery_confirm_large_output = False
+    props.interlace_pe = 16.7240
+    props.interlace_angle = 0.0
+    props.interlace_offset = 0.0
+    props.interlace_reverse_views = False
+    props.film_halftone_method = "FM"
+
+    result = bpy.ops.lightfield.generate_delivery()
+    assert result == {"FINISHED"}, result
+    delivery_dir = Path(out_dir) / "delivery" / "frame_0001"
+    interlaced = delivery_dir / "interlaced.tif"
+    preview = delivery_dir / "interlaced_preview.png"
+    film = delivery_dir / "film_1bit.tif"
+    manifest_path = delivery_dir / "delivery_manifest.json"
+    assert interlaced.exists(), f"Missing {interlaced}"
+    assert preview.exists(), f"Missing {preview}"
+    assert film.exists(), f"Missing {film}"
+    assert manifest_path.exists(), f"Missing {manifest_path}"
+    assert_rgb_tiff(interlaced, 20, 10)
+    assert_blender_image_size(preview, 20, 10)
+    assert_1bit_tiff(film, 20, 10)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["delivery"]["width_px"] == 20, manifest["delivery"]
+    assert manifest["delivery"]["height_px"] == 10, manifest["delivery"]
+    assert manifest["delivery"]["ppi"] == 100, manifest["delivery"]
+    assert manifest["source_views"]["camera_count"] == 3, manifest["source_views"]
+    assert manifest["files"]["film_1bit_tiff"] == "film_1bit.tif", manifest["files"]
+
+    props.delivery_width_mm = 1000
+    props.delivery_height_mm = 1000
+    props.delivery_ppi = 1000
+    props.delivery_confirm_large_output = False
+    try:
+        result = bpy.ops.lightfield.generate_delivery()
+    except RuntimeError as exc:
+        assert "最终像素超过 100MP" in str(exc), exc
+        result = {"CANCELLED"}
+    assert result == {"CANCELLED"}, result
+    error_log = Path(out_dir) / "delivery" / "frame_0001" / "delivery_error.log"
+    assert error_log.exists(), "Expected delivery_error.log after large-output refusal"
 
     print(f"BLENDER_INTEGRATION_OK plugin_source={plugin_source} output={out_dir}")
 

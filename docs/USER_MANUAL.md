@@ -7,7 +7,7 @@ This manual describes how to install and use the `Light Field Render` Blender ad
 Download the add-on ZIP from the GitHub Release page. The file should be named like:
 
 ```text
-light_field_render-v0.1.7.zip
+light_field_render-v0.1.8.zip
 ```
 
 Install it in Blender:
@@ -34,6 +34,8 @@ Important terms:
 - `传感器宽度`: Blender camera sensor width in millimeters.
 - `输出分辨率`: output resolution for each rendered view.
 - `输出格式`: `PNG`, continuous `TIFF`, or halftoned `1-bit 菲林 TIFF`.
+- `最终交付输出`: current-frame delivery workflow that uses physical size in mm plus PPI to generate final interlaced files.
+- `交付宽度` / `交付高度` / `PPI`: customer delivery size. Final pixels are calculated as `round(mm / 25.4 * PPI)`.
 
 ## 3. Creating A Camera Array
 
@@ -125,17 +127,70 @@ Halftone controls:
 - `网点形状`: round, diamond, or ellipse in AM mode.
 - `Gamma`: luminance correction before halftoning.
 
-## 8. Recommended Workflow
+## 8. Final Delivery Output
+
+The `最终交付输出` panel is for the print/film deliverable. It is intentionally separate from Blender's source-view render resolution:
+
+- `输出分辨率 W/H` controls each `camera_###.png` source view rendered by Blender.
+- `交付宽度 mm`, `交付高度 mm`, and `PPI` control the final interlaced delivery pixel size.
+
+For example, `210 mm x 297 mm @ 300 PPI` produces approximately `2480 x 3508` final pixels. Blender does not need to render every camera at that final size; the add-on resamples the source views during interlacing.
+
+Workflow:
+
+1. Set the normal camera-array and source-view render settings.
+2. In `最终交付输出`, enter `交付宽度 mm`, `交付高度 mm`, and `PPI`.
+3. Set interlace parameters:
+   - `PE`: original PE formula parameter from the existing interlace workflow.
+   - `Angle (°)`: interlace angle in degrees; the add-on converts it to radians internally.
+   - `Offset`: original formula offset.
+   - `反转视角顺序`: maps view 0 to `camera_N-1` when enabled.
+4. Configure the existing `1-bit 菲林 TIFF` halftone settings if film output is needed.
+5. Click `生成当前帧交付文件`.
+
+The output folder is:
+
+```text
+light_field_output/
+  frame_0001/
+    camera_000.png
+    camera_001.png
+    ...
+  delivery/
+    frame_0001/
+      interlaced.tif
+      interlaced_preview.png
+      film_1bit.tif
+      delivery_manifest.json
+```
+
+Files:
+
+- `interlaced.tif`: full-size continuous-tone 8-bit RGB TIFF, uncompressed, with PPI written as TIFF DPI metadata.
+- `interlaced_preview.png`: quick preview PNG with max edge 2048px.
+- `film_1bit.tif`: full-size single-channel 1-bit black/white TIFF using the selected FM/AM halftone settings.
+- `delivery_manifest.json`: records plugin version, frame, mm/PPI/pixel size, source resolution, camera count, interlace parameters, halftone parameters, warnings, file names, and elapsed time.
+
+Safety behavior:
+
+- If source view PNGs already exist and match the current camera count and source resolution, they are reused.
+- If source view PNGs are missing, they are rendered before interlacing.
+- If camera or output settings are dirty, the add-on applies them and rerenders source views.
+- If the final output exceeds 100 megapixels, `确认生成大图` must be checked.
+- If the final output is more than 2x larger than the source-view resolution on either axis, the panel warns that clarity may be insufficient.
+- Failed or stopped generation removes temporary `.tmp` files and writes `delivery_error.log`.
+
+## 9. Recommended Workflow
 
 1. Test with a small camera count such as `5` or `9`.
 2. Verify that the focal plane and depth helper volume match the target scene.
 3. Render a low-resolution single frame.
 4. Check left, center, and right views.
-5. If film output is required, test `1-bit 菲林 TIFF` at low resolution and inspect dot density.
+5. If final delivery output is required, test `最终交付输出` with a small physical size and low PPI first.
 6. Increase camera count and resolution.
-7. Render the final frame or animation.
+7. Generate the final current-frame delivery files.
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 If the add-on panel is not visible:
 
@@ -168,7 +223,18 @@ If slider dragging feels delayed:
 
 - This is intentional. Heavy camera-array updates are deferred. Click `应用相机参数`, or enable `拖动结束后自动应用` if you want delayed automatic application.
 
-## 10. Notes For Release Builds
+If final delivery generation is refused:
+
+- Check that `交付宽度 mm`, `交付高度 mm`, and `PPI` are all greater than zero.
+- If the final output exceeds 100 megapixels, enable `确认生成大图`.
+- Check `delivery_error.log` inside the delivery frame folder for the detailed failure.
+
+If final delivery looks soft:
+
+- Increase the normal `输出分辨率 W/H` for source views.
+- The final delivery stage can resample source views to a larger size, but it cannot create detail that was not rendered by Blender.
+
+## 11. Notes For Release Builds
 
 The Blender add-on ZIP must contain the add-on package folder at the ZIP root:
 

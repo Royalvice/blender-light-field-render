@@ -11,6 +11,10 @@ from .render_ops import (
     LIGHTFIELD_OT_render_frame,
     LIGHTFIELD_OT_stop_render,
 )
+from .delivery_ops import (
+    LIGHTFIELD_OT_generate_delivery,
+    LIGHTFIELD_OT_stop_delivery,
+)
 
 
 classes = [
@@ -21,6 +25,8 @@ classes = [
     LIGHTFIELD_OT_render_frame,
     LIGHTFIELD_OT_render_animation,
     LIGHTFIELD_OT_stop_render,
+    LIGHTFIELD_OT_generate_delivery,
+    LIGHTFIELD_OT_stop_delivery,
 ]
 
 

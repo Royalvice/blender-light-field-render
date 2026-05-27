@@ -12,6 +12,8 @@ The repository is now organized around the Blender add-on. The older Three.js vi
 - Supports single-frame rendering across all cameras.
 - Supports animation rendering across all cameras and a selected frame range.
 - Supports PNG, continuous TIFF, and halftoned 1-bit Film TIFF output.
+- Generates final delivery interlace files from customer physical size in mm plus PPI.
+- Outputs full-size continuous interlaced TIFF, 2048px preview PNG, 1-bit film TIFF, and a JSON manifest.
 - Avoids UI stalls by deferring heavy camera-array updates while sliders are dragged.
 - Tracks render progress and can resume from existing output files.
 
@@ -25,7 +27,7 @@ The repository is now organized around the Blender add-on. The older Three.js vi
 Use the release ZIP asset named like:
 
 ```text
-light_field_render-v0.1.7.zip
+light_field_render-v0.1.8.zip
 ```
 
 Then install it in Blender:
@@ -62,6 +64,28 @@ utils/                   Auxiliary light-field image utilities and sample data
 9. Run single-frame or animation rendering with `渲染当前帧` or `渲染动画`.
 
 See [docs/USER_MANUAL.md](docs/USER_MANUAL.md) for the full workflow.
+
+## Final Delivery Output
+
+The `最终交付输出` panel separates Blender source-view rendering from the final print/film size. Use the existing `输出分辨率 W/H` for each rendered camera view, then set the customer delivery size with:
+
+- `交付宽度 mm`
+- `交付高度 mm`
+- `PPI`
+
+The add-on calculates the final pixel size as `round(mm / 25.4 * PPI)`. `生成当前帧交付文件` renders or reuses the current frame source views, interlaces them with the PE/Angle/Offset parameters, and writes:
+
+```text
+output_path/
+  delivery/
+    frame_0001/
+      interlaced.tif
+      interlaced_preview.png
+      film_1bit.tif
+      delivery_manifest.json
+```
+
+This avoids forcing Blender to render every camera at the final print resolution.
 
 ## Build Release ZIP
 

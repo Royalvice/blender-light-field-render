@@ -199,6 +199,71 @@ class LIGHTFIELD_PT_film_tiff(Panel):
         box.label(text="默认推荐 FM，通常更不容易出现龟纹。")
 
 
+class LIGHTFIELD_PT_delivery_output(Panel):
+    bl_label = "最终交付输出"
+    bl_idname = "LIGHTFIELD_PT_delivery_output"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "光场"
+    bl_parent_id = "LIGHTFIELD_PT_main"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        layout = self.layout
+        props = context.scene.light_field_props
+
+        col = layout.column(align=True)
+        col.label(text="交付尺寸", icon="OUTPUT")
+        col.prop(props, "delivery_width_mm", text="宽度 mm")
+        col.prop(props, "delivery_height_mm", text="高度 mm")
+        col.prop(props, "delivery_ppi", text="PPI")
+
+        width_px, height_px = props.get_delivery_pixel_size()
+        if width_px > 0 and height_px > 0:
+            col.label(text=f"最终像素: {width_px} x {height_px}")
+        else:
+            col.label(text="请填写交付宽度、高度和 PPI", icon="ERROR")
+
+        if props.is_delivery_large_output():
+            box = layout.box()
+            box.label(text="最终像素超过 100MP，可能耗时较长。", icon="ERROR")
+            box.prop(props, "delivery_confirm_large_output", text="确认生成大图")
+
+        if props.has_delivery_source_upscale_warning():
+            box = layout.box()
+            box.label(text="最终尺寸超过源视角 2 倍，清晰度可能不足。", icon="INFO")
+
+        layout.separator()
+        col = layout.column(align=True)
+        col.label(text="交织参数", icon="MOD_WAVE")
+        col.prop(props, "interlace_pe", text="PE")
+        col.prop(props, "interlace_angle", text="Angle (°)")
+        col.prop(props, "interlace_offset", text="Offset")
+        col.prop(props, "interlace_reverse_views", text="反转视角顺序")
+
+        layout.separator()
+        col = layout.column(align=True)
+        col.label(text="输出文件", icon="FILE_TICK")
+        col.label(text="interlaced.tif / interlaced_preview.png")
+        col.label(text="film_1bit.tif / delivery_manifest.json")
+
+        layout.separator()
+        col = layout.column(align=True)
+        col.scale_y = 1.3
+        if props.is_delivery_generating:
+            col.operator("lightfield.stop_delivery", text="停止交付生成", icon="CANCEL")
+            box = layout.box()
+            total = max(1, props.delivery_progress_total)
+            percent = props.delivery_progress / total * 100
+            box.label(text=f"{props.delivery_stage}: {props.delivery_progress}/{total} ({percent:.1f}%)", icon="TIME")
+            if props.delivery_info:
+                box.label(text=props.delivery_info)
+        else:
+            col.operator("lightfield.generate_delivery", text="生成当前帧交付文件", icon="RENDER_RESULT")
+            if props.delivery_last_output_dir:
+                layout.label(text=f"最近输出: {props.delivery_last_output_dir}", icon="FILE_FOLDER")
+
+
 class LIGHTFIELD_PT_render_actions(Panel):
     bl_label = "渲染操作"
     bl_idname = "LIGHTFIELD_PT_render_actions"
