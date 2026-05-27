@@ -266,6 +266,8 @@ class LIGHTFIELD_OT_render_frame(Operator):
         start_time = time.perf_counter()
         props.render_start_time = 0.0
         props.render_elapsed_time = 0.0
+        wm = context.window_manager
+        wm.progress_begin(0, max(1, props.camera_count))
 
         total = props.camera_count
         try:
@@ -284,6 +286,7 @@ class LIGHTFIELD_OT_render_frame(Operator):
                     props.render_info = f"相机 {cam_idx + 1}/{total}"
 
                 props.render_progress = cam_idx
+                wm.progress_update(cam_idx)
                 _safe_redraw()
 
                 control.set_active_camera(cam_idx)
@@ -293,11 +296,13 @@ class LIGHTFIELD_OT_render_frame(Operator):
             total_time = time.perf_counter() - start_time
             props.is_rendering = False
             props.render_progress = total
+            wm.progress_update(total)
             props.render_elapsed_time = total_time
             props.render_info = f"完成，用时 {format_time(total_time)}"
             if self._original_camera:
                 context.scene.camera = self._original_camera
             _restore_render_settings(context.scene, captured)
+            wm.progress_end()
 
         self.report({"INFO"}, f"已渲染 {total} 台相机，用时 {format_time(props.render_elapsed_time)}")
         return {"FINISHED"}
@@ -370,6 +375,8 @@ class LIGHTFIELD_OT_render_animation(Operator):
         start_time = time.perf_counter()
         props.render_start_time = 0.0
         props.render_elapsed_time = 0.0
+        wm = context.window_manager
+        wm.progress_begin(0, max(1, props.camera_count))
 
         context.scene.frame_start = frame_start
         context.scene.frame_end = frame_end
@@ -394,6 +401,7 @@ class LIGHTFIELD_OT_render_animation(Operator):
                     props.render_info = f"相机 {cam_idx + 1}/{total_cameras} | 帧 {frame_start}-{frame_end}"
 
                 props.render_progress = cam_idx
+                wm.progress_update(cam_idx)
                 _safe_redraw()
                 control.set_active_camera(cam_idx)
 
@@ -404,6 +412,7 @@ class LIGHTFIELD_OT_render_animation(Operator):
             total_time = time.perf_counter() - start_time
             props.is_rendering = False
             props.render_progress = total_cameras
+            wm.progress_update(total_cameras)
             props.render_elapsed_time = total_time
             props.render_info = f"完成，用时 {format_time(total_time)}"
 
@@ -412,6 +421,7 @@ class LIGHTFIELD_OT_render_animation(Operator):
             if self._original_camera:
                 context.scene.camera = self._original_camera
             _restore_render_settings(context.scene, captured)
+            wm.progress_end()
 
         self.report({"INFO"}, f"已渲染 {total_cameras} 台相机，用时 {format_time(props.render_elapsed_time)}")
         return {"FINISHED"}

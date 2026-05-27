@@ -164,6 +164,8 @@ class LIGHTFIELD_OT_generate_delivery(Operator):
         captured = None
         original_camera = scene.camera
         start_time = time.perf_counter()
+        wm = context.window_manager
+        wm_progress_active = {"value": False}
 
         def progress(stage: str, current: int, total: int, info: str = "") -> None:
             current_stage["name"] = stage
@@ -172,6 +174,11 @@ class LIGHTFIELD_OT_generate_delivery(Operator):
             props.delivery_progress_total = max(1, int(total))
             props.delivery_info = info
             props.delivery_elapsed_time = time.perf_counter() - start_time
+            if not wm_progress_active["value"]:
+                wm.progress_begin(0, 1000)
+                wm_progress_active["value"] = True
+            percent = 0.0 if total <= 0 else max(0.0, min(1.0, float(current) / float(total)))
+            wm.progress_update(int(percent * 1000))
             _safe_redraw()
 
         try:
@@ -258,6 +265,8 @@ class LIGHTFIELD_OT_generate_delivery(Operator):
                 scene.camera = original_camera
             if captured:
                 _restore_render_settings(scene, captured)
+            if wm_progress_active["value"]:
+                wm.progress_end()
 
 
 class LIGHTFIELD_OT_stop_delivery(Operator):

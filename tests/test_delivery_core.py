@@ -23,15 +23,26 @@ def load_delivery_module():
 def read_tiff_tags(path):
     data = Path(path).read_bytes()
     assert data[:2] == b"II"
-    assert struct.unpack_from("<H", data, 2)[0] == 42
-    ifd_offset = struct.unpack_from("<I", data, 4)[0]
-    count = struct.unpack_from("<H", data, ifd_offset)[0]
+    magic = struct.unpack_from("<H", data, 2)[0]
     tags = {}
-    cursor = ifd_offset + 2
+    if magic == 42:
+        ifd_offset = struct.unpack_from("<I", data, 4)[0]
+        count = struct.unpack_from("<H", data, ifd_offset)[0]
+        cursor = ifd_offset + 2
+        for _ in range(count):
+            tag, field_type, value_count, value = struct.unpack_from("<HHII", data, cursor)
+            tags[tag] = (field_type, value_count, value)
+            cursor += 12
+        return tags
+    assert magic == 43
+    assert struct.unpack_from("<HH", data, 4) == (8, 0)
+    ifd_offset = struct.unpack_from("<Q", data, 8)[0]
+    count = struct.unpack_from("<Q", data, ifd_offset)[0]
+    cursor = ifd_offset + 8
     for _ in range(count):
-        tag, field_type, value_count, value = struct.unpack_from("<HHII", data, cursor)
+        tag, field_type, value_count, value = struct.unpack_from("<HHQQ", data, cursor)
         tags[tag] = (field_type, value_count, value)
-        cursor += 12
+        cursor += 20
     return tags
 
 
@@ -85,6 +96,29 @@ class DeliveryCoreTests(unittest.TestCase):
             self.assertEqual(tags[258][2] & 0xFFFF, 1)
             self.assertEqual(tags[277][2] & 0xFFFF, 1)
 
+    def test_bigtiff_writers_use_64bit_offsets_and_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rgb_tiff = os.path.join(tmp, "rgb_big.tif")
+            with self.delivery.RgbTiffWriter(rgb_tiff, 2, 1, 4000, force_bigtiff=True) as writer:
+                self.assertTrue(writer.is_bigtiff)
+                writer.write_row(bytes([255, 0, 0, 0, 255, 0]))
+            data = Path(rgb_tiff).read_bytes()
+            self.assertEqual(struct.unpack_from("<H", data, 2)[0], 43)
+            tags = read_tiff_tags(rgb_tiff)
+            self.assertEqual(tags[273][0], 16)
+            self.assertEqual(tags[279][0], 16)
+            self.assertEqual(tags[279][2], 6)
+
+            bit_tiff = os.path.join(tmp, "bit_big.tif")
+            with self.delivery.OneBitTiffWriter(bit_tiff, 9, 1, 4000, force_bigtiff=True) as writer:
+                self.assertTrue(writer.is_bigtiff)
+                writer.write_black_row([True, False, True, False, True, False, True, False, True])
+            self.assertEqual(struct.unpack_from("<H", Path(bit_tiff).read_bytes(), 2)[0], 43)
+            tags = read_tiff_tags(bit_tiff)
+            self.assertEqual(tags[273][0], 16)
+            self.assertEqual(tags[279][0], 16)
+            self.assertEqual(tags[279][2], 2)
+
     def test_generate_delivery_outputs_writes_expected_files_and_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             source_paths = []
@@ -109,7 +143,7 @@ class DeliveryCoreTests(unittest.TestCase):
                 source_height=3,
                 interlace=self.delivery.InterlaceSettings(pe=16.7240, angle_degrees=0.0, offset=0.0),
                 halftone=self.delivery.HalftoneSettings(method="FM", lpi=100, gamma=1.0),
-                plugin_version="0.1.8",
+                plugin_version="0.1.9",
             )
 
             result = self.delivery.generate_delivery_outputs(source_paths, tmp, settings)
@@ -131,7 +165,7 @@ class DeliveryCoreTests(unittest.TestCase):
             self.assertEqual(bit_tags[258][2] & 0xFFFF, 1)
 
             manifest = json.loads(Path(result.paths.manifest_json).read_text(encoding="utf-8"))
-            self.assertEqual(manifest["plugin_version"], "0.1.8")
+            self.assertEqual(manifest["plugin_version"], "0.1.9")
             self.assertEqual(manifest["delivery"]["width_px"], 10)
             self.assertEqual(manifest["delivery"]["height_px"], 5)
             self.assertEqual(manifest["source_views"]["camera_count"], 3)

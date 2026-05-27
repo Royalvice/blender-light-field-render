@@ -14,6 +14,8 @@ The repository is now organized around the Blender add-on. The older Three.js vi
 - Supports PNG, continuous TIFF, and halftoned 1-bit Film TIFF output.
 - Generates final delivery interlace files from customer physical size in mm plus PPI.
 - Outputs full-size continuous interlaced TIFF, 2048px preview PNG, 1-bit film TIFF, and a JSON manifest.
+- Automatically writes BigTIFF for continuous interlaced output when the file exceeds classic TIFF limits.
+- Uses NumPy acceleration when available; release ZIPs can bundle Blender-compatible NumPy for no-install use.
 - Avoids UI stalls by deferring heavy camera-array updates while sliders are dragged.
 - Tracks render progress and can resume from existing output files.
 
@@ -27,7 +29,7 @@ The repository is now organized around the Blender add-on. The older Three.js vi
 Use the release ZIP asset named like:
 
 ```text
-light_field_render-v0.1.8.zip
+light_field_render-v0.1.9.zip
 ```
 
 Then install it in Blender:
@@ -87,6 +89,8 @@ output_path/
 
 This avoids forcing Blender to render every camera at the final print resolution.
 
+For very large delivery sizes, the add-on switches `interlaced.tif` to BigTIFF automatically. For example, `194 x 345 mm @ 4000 PPI` is about `30551 x 54331` pixels, so the RGB continuous TIFF is roughly 5 GB and cannot be represented by classic TIFF.
+
 ## Build Release ZIP
 
 From the repository root:
@@ -94,6 +98,8 @@ From the repository root:
 ```powershell
 .\scripts\build_release.ps1
 ```
+
+By default the release script attempts to bundle Blender's compatible NumPy under `light_field_plugin/_vendor/` inside the ZIP so users do not need to install Python packages manually. Use `-NoBundleNumpy` only for a slim development ZIP.
 
 The output will be written to `dist/` and is suitable for GitHub Releases and Blender add-on installation.
 

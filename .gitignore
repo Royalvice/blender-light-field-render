@@ -5,3 +5,5 @@ utils/interlaced_result.png
 dist/
 __pycache__/
 *.py[cod]
+probe_dataset*/
+light_field_plugin/_vendor/

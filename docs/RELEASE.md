@@ -39,27 +39,27 @@ Use this checklist when publishing a GitHub Release.
 Recommended tag format:
 
 ```text
-v0.1.8
+v0.1.9
 ```
 
 Recommended title:
 
 ```text
-Light Field Render v0.1.8
+Light Field Render v0.1.9
 ```
 
 Release asset:
 
 ```text
-dist/light_field_render-v0.1.8.zip
+dist/light_field_render-v0.1.9.zip
 ```
 
 Suggested release notes:
 
 ```markdown
-## Light Field Render v0.1.8
+## Light Field Render v0.1.9
 
-Final delivery interlace output release.
+BigTIFF, bundled NumPy, and large-delivery progress release.
 
 ### Features
 
@@ -79,8 +79,12 @@ Final delivery interlace output release.
 - Keeps Blender source-view resolution separate from final delivery pixel size to avoid rendering every camera at print resolution.
 - Reuses or renders current-frame source PNG views before interlacing.
 - Adds large-output confirmation, source-upscale warning, progress/status reporting, and error-log output.
+- Automatically writes BigTIFF when continuous interlaced RGB output exceeds classic TIFF 32-bit limits.
+- Adds optional NumPy acceleration for row interlacing and AM halftone generation.
+- Bundles Blender-compatible NumPy in release ZIPs by default for no-install user setup.
+- Adds Blender status-bar progress updates for rendering and delivery generation.
 
 ### Installation
 
-Download `light_field_render-v0.1.8.zip`, then install it from Blender via `Edit > Preferences > Add-ons > Install...`.
+Download `light_field_render-v0.1.9.zip`, then install it from Blender via `Edit > Preferences > Add-ons > Install...`.
 ```

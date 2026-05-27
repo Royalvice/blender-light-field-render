@@ -4,7 +4,7 @@
 bl_info = {
     "name": "Light Field Render",
     "author": "Light Field Studio",
-    "version": (0, 1, 8),
+    "version": (0, 1, 9),
     "blender": (4, 2, 0),
     "location": "3D 视图 > 侧边栏 > 光场",
     "description": "面向光场显示与多视角输出的渲染插件，支持离轴透视相机阵列",

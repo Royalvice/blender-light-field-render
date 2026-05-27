@@ -166,7 +166,7 @@ light_field_output/
 
 Files:
 
-- `interlaced.tif`: full-size continuous-tone 8-bit RGB TIFF, uncompressed, with PPI written as TIFF DPI metadata.
+- `interlaced.tif`: full-size continuous-tone 8-bit RGB TIFF, uncompressed, with PPI written as TIFF DPI metadata. If the RGB image exceeds classic TIFF limits, this file is written as BigTIFF automatically.
 - `interlaced_preview.png`: quick preview PNG with max edge 2048px.
 - `film_1bit.tif`: full-size single-channel 1-bit black/white TIFF using the selected FM/AM halftone settings.
 - `delivery_manifest.json`: records plugin version, frame, mm/PPI/pixel size, source resolution, camera count, interlace parameters, halftone parameters, warnings, file names, and elapsed time.
@@ -177,6 +177,8 @@ Safety behavior:
 - If source view PNGs are missing, they are rendered before interlacing.
 - If camera or output settings are dirty, the add-on applies them and rerenders source views.
 - If the final output exceeds 100 megapixels, `确认生成大图` must be checked.
+- Very large deliverables can still take a long time. `194 x 345 mm @ 4000 PPI` is about `30551 x 54331` pixels, roughly 5 GB for the continuous RGB TIFF alone, so the add-on uses BigTIFF and reports row progress while writing.
+- Release ZIPs bundle Blender-compatible NumPy by default. If NumPy is available, the delivery stage uses it to accelerate row interlacing and AM halftone generation.
 - If the final output is more than 2x larger than the source-view resolution on either axis, the panel warns that clarity may be insufficient.
 - Failed or stopped generation removes temporary `.tmp` files and writes `delivery_error.log`.
 

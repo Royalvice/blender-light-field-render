@@ -1,7 +1,8 @@
 # Final delivery interlace and TIFF output utilities.
 #
 # This module intentionally avoids Blender imports so the delivery pipeline can
-# be unit-tested with regular Python. It also avoids third-party dependencies.
+# be unit-tested with regular Python. NumPy is optional at runtime; release
+# builds can bundle it under light_field_plugin/_vendor for faster large output.
 
 from __future__ import annotations
 
@@ -9,6 +10,7 @@ import json
 import math
 import os
 import struct
+import sys
 import time
 import traceback
 import zlib
@@ -21,6 +23,17 @@ MM_PER_INCH = 25.4
 LARGE_OUTPUT_PIXELS = 100_000_000
 SOURCE_UPSCALE_WARNING_FACTOR = 2.0
 PREVIEW_MAX_EDGE = 2048
+UINT32_MAX = 0xFFFFFFFF
+
+
+_VENDOR_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "_vendor")
+if os.path.isdir(_VENDOR_DIR) and _VENDOR_DIR not in sys.path:
+    sys.path.insert(0, _VENDOR_DIR)
+
+try:
+    import numpy as _np
+except Exception:
+    _np = None
 
 
 class DeliveryError(RuntimeError):
@@ -365,18 +378,28 @@ def _ifd_entry(tag: int, field_type: int, count: int, value_or_offset: int) -> b
     return struct.pack("<HHII", tag, field_type, count, value_or_offset)
 
 
+def _bigtiff_ifd_entry(tag: int, field_type: int, count: int, value_or_offset: int) -> bytes:
+    return struct.pack("<HHQQ", tag, field_type, count, value_or_offset)
+
+
 def _short_value(value: int) -> int:
     return value & 0xFFFF
 
 
+def numpy_available() -> bool:
+    return _np is not None
+
+
 class RgbTiffWriter:
-    def __init__(self, path: str, width: int, height: int, dpi: int):
+    def __init__(self, path: str, width: int, height: int, dpi: int, force_bigtiff: bool = False):
         self.path = path
         self.width = width
         self.height = height
         self.dpi = int(dpi)
+        self.force_bigtiff = force_bigtiff
         self._file = None
         self._rows_written = 0
+        self.is_bigtiff = False
 
     def __enter__(self):
         if self.width <= 0 or self.height <= 0:
@@ -394,6 +417,8 @@ class RgbTiffWriter:
         software_offset = yres_offset + 8
         image_offset = software_offset + len(software)
         image_bytes = self.width * self.height * 3
+        if self.force_bigtiff or image_offset > UINT32_MAX or image_bytes > UINT32_MAX:
+            return self._enter_bigtiff(software)
 
         entries = [
             _ifd_entry(256, 4, 1, self.width),
@@ -426,6 +451,50 @@ class RgbTiffWriter:
         f.write(software)
         return self
 
+    def _enter_bigtiff(self, software: bytes):
+        self.is_bigtiff = True
+        entry_count = 13
+        ifd_offset = 16
+        ifd_size = 8 + entry_count * 20 + 8
+        bits_offset = ifd_offset + ifd_size
+        xres_offset = bits_offset + 6
+        yres_offset = xres_offset + 8
+        software_offset = yres_offset + 8
+        image_offset = software_offset + len(software)
+        image_bytes = self.width * self.height * 3
+
+        entries = [
+            _bigtiff_ifd_entry(256, 4, 1, self.width),
+            _bigtiff_ifd_entry(257, 4, 1, self.height),
+            _bigtiff_ifd_entry(258, 3, 3, bits_offset),
+            _bigtiff_ifd_entry(259, 3, 1, _short_value(1)),
+            _bigtiff_ifd_entry(262, 3, 1, _short_value(2)),
+            _bigtiff_ifd_entry(273, 16, 1, image_offset),
+            _bigtiff_ifd_entry(277, 3, 1, _short_value(3)),
+            _bigtiff_ifd_entry(278, 4, 1, self.height),
+            _bigtiff_ifd_entry(279, 16, 1, image_bytes),
+            _bigtiff_ifd_entry(282, 5, 1, xres_offset),
+            _bigtiff_ifd_entry(283, 5, 1, yres_offset),
+            _bigtiff_ifd_entry(296, 3, 1, _short_value(2)),
+            _bigtiff_ifd_entry(305, 2, len(software), software_offset),
+        ]
+        entries.sort(key=lambda item: struct.unpack("<H", item[:2])[0])
+
+        f = self._file
+        f.write(b"II")
+        f.write(struct.pack("<H", 43))
+        f.write(struct.pack("<HH", 8, 0))
+        f.write(struct.pack("<Q", ifd_offset))
+        f.write(struct.pack("<Q", entry_count))
+        for entry in entries:
+            f.write(entry)
+        f.write(struct.pack("<Q", 0))
+        f.write(struct.pack("<HHH", 8, 8, 8))
+        f.write(struct.pack("<II", self.dpi, 1))
+        f.write(struct.pack("<II", self.dpi, 1))
+        f.write(software)
+        return self
+
     def write_row(self, row: bytes) -> None:
         if self._file is None:
             raise RuntimeError("TIFF writer is not open")
@@ -444,14 +513,16 @@ class RgbTiffWriter:
 
 
 class OneBitTiffWriter:
-    def __init__(self, path: str, width: int, height: int, dpi: int):
+    def __init__(self, path: str, width: int, height: int, dpi: int, force_bigtiff: bool = False):
         self.path = path
         self.width = width
         self.height = height
         self.dpi = int(dpi)
+        self.force_bigtiff = force_bigtiff
         self.row_bytes = (width + 7) // 8
         self._file = None
         self._rows_written = 0
+        self.is_bigtiff = False
 
     def __enter__(self):
         if self.width <= 0 or self.height <= 0:
@@ -468,6 +539,8 @@ class OneBitTiffWriter:
         software_offset = yres_offset + 8
         image_offset = software_offset + len(software)
         image_bytes = self.row_bytes * self.height
+        if self.force_bigtiff or image_offset > UINT32_MAX or image_bytes > UINT32_MAX:
+            return self._enter_bigtiff(software)
 
         entries = [
             _ifd_entry(256, 4, 1, self.width),
@@ -499,11 +572,58 @@ class OneBitTiffWriter:
         f.write(software)
         return self
 
+    def _enter_bigtiff(self, software: bytes):
+        self.is_bigtiff = True
+        entry_count = 13
+        ifd_offset = 16
+        ifd_size = 8 + entry_count * 20 + 8
+        xres_offset = ifd_offset + ifd_size
+        yres_offset = xres_offset + 8
+        software_offset = yres_offset + 8
+        image_offset = software_offset + len(software)
+        image_bytes = self.row_bytes * self.height
+
+        entries = [
+            _bigtiff_ifd_entry(256, 4, 1, self.width),
+            _bigtiff_ifd_entry(257, 4, 1, self.height),
+            _bigtiff_ifd_entry(258, 3, 1, _short_value(1)),
+            _bigtiff_ifd_entry(259, 3, 1, _short_value(1)),
+            _bigtiff_ifd_entry(262, 3, 1, _short_value(0)),
+            _bigtiff_ifd_entry(273, 16, 1, image_offset),
+            _bigtiff_ifd_entry(277, 3, 1, _short_value(1)),
+            _bigtiff_ifd_entry(278, 4, 1, self.height),
+            _bigtiff_ifd_entry(279, 16, 1, image_bytes),
+            _bigtiff_ifd_entry(282, 5, 1, xres_offset),
+            _bigtiff_ifd_entry(283, 5, 1, yres_offset),
+            _bigtiff_ifd_entry(296, 3, 1, _short_value(2)),
+            _bigtiff_ifd_entry(305, 2, len(software), software_offset),
+        ]
+        entries.sort(key=lambda item: struct.unpack("<H", item[:2])[0])
+
+        f = self._file
+        f.write(b"II")
+        f.write(struct.pack("<H", 43))
+        f.write(struct.pack("<HH", 8, 0))
+        f.write(struct.pack("<Q", ifd_offset))
+        f.write(struct.pack("<Q", entry_count))
+        for entry in entries:
+            f.write(entry)
+        f.write(struct.pack("<Q", 0))
+        f.write(struct.pack("<II", self.dpi, 1))
+        f.write(struct.pack("<II", self.dpi, 1))
+        f.write(software)
+        return self
+
     def write_black_row(self, black_row: Sequence[bool]) -> None:
         if self._file is None:
             raise RuntimeError("TIFF writer is not open")
         if len(black_row) != self.width:
             raise ValueError("1-bit TIFF row length does not match image width")
+        if _np is not None and hasattr(black_row, "dtype"):
+            packed = _np.packbits(black_row.astype(_np.uint8), bitorder="big").tobytes()
+            self._file.write(packed)
+            self._rows_written += 1
+            return
         packed = bytearray()
         byte = 0
         bit_count = 0
@@ -548,11 +668,14 @@ class StreamingHalftoner:
         self._cos = math.cos(self._angle)
         self._sin = math.sin(self._angle)
         self._cell = max(2.0, float(self.dpi) / max(1.0, float(settings.lpi)))
+        self._x_np = _np.arange(width, dtype=_np.float32) if _np is not None else None
 
     def process_rgb_row(self, y: int, row: bytes) -> List[bool]:
         if len(row) != self.width * 3:
             raise ValueError("Halftone row length does not match image width")
         if self._method == "AM":
+            if _np is not None:
+                return self._process_am_row_numpy(y, row)
             return self._process_am_row(y, row)
         return self._process_fm_row(row)
 
@@ -615,17 +738,70 @@ class StreamingHalftoner:
             black[x] = metric <= threshold
         return black
 
+    def _process_am_row_numpy(self, y: int, row: bytes):
+        shape = (self.settings.dot_shape or "ROUND").upper()
+        rgb = _np.frombuffer(row, dtype=_np.uint8).reshape(self.width, 3).astype(_np.float32)
+        luma = 0.2126 * rgb[:, 0] + 0.7152 * rgb[:, 1] + 0.0722 * rgb[:, 2]
+        inv_gamma = 1.0 / max(float(self.settings.gamma), 1e-6)
+        luma_norm = _np.power(_np.clip(luma, 0.0, 255.0) / 255.0, inv_gamma)
+        darkness = 1.0 - _np.clip(luma_norm, 0.0, 1.0)
+
+        x = self._x_np
+        xr = x * self._cos + float(y) * self._sin
+        yr = -x * self._sin + float(y) * self._cos
+        u = ((xr / self._cell) - _np.floor(xr / self._cell)) * 2.0 - 1.0
+        v = ((yr / self._cell) - _np.floor(yr / self._cell)) * 2.0 - 1.0
+
+        if shape == "DIAMOND":
+            metric = (_np.abs(u) + _np.abs(v)) / 2.0
+            threshold = darkness
+        elif shape == "ELLIPSE":
+            metric = _np.sqrt(u * u + (v / 0.65) * (v / 0.65))
+            threshold = _np.sqrt(darkness)
+        else:
+            metric = _np.sqrt(u * u + v * v)
+            threshold = _np.sqrt(darkness)
+        return (darkness >= 1.0) | ((darkness > 0.0) & (metric <= threshold))
+
+
+class NumpyPngSource:
+    def __init__(self, image: PngImage):
+        self.width = image.width
+        self.height = image.height
+        self.array = _np.frombuffer(image.data, dtype=_np.uint8).reshape(image.height, image.width, 3)
+
 
 class InterlaceRenderer:
-    def __init__(self, source_paths: Sequence[str], settings: DeliverySettings, width_px: int, height_px: int):
+    def __init__(
+        self,
+        source_paths: Sequence[str],
+        settings: DeliverySettings,
+        width_px: int,
+        height_px: int,
+        progress_callback: Optional[ProgressCallback] = None,
+        stop_callback: Optional[StopCallback] = None,
+    ):
         if len(source_paths) != settings.camera_count:
             raise DeliveryError("Source view count does not match camera count")
-        self.sources = [read_png_rgb(path) for path in source_paths]
+        self.sources = []
+        for index, path in enumerate(source_paths, start=1):
+            _check_stop(stop_callback)
+            _emit_progress(progress_callback, "加载源视角 PNG", index, len(source_paths), os.path.basename(path))
+            self.sources.append(read_png_rgb(path))
         self.settings = settings
         self.width_px = width_px
         self.height_px = height_px
         self.view_order = build_view_order(settings.camera_count, settings.interlace.reverse_views)
         self.angle_radians = math.radians(settings.interlace.angle_degrees)
+        self._use_numpy = _np is not None and bool(self.sources)
+        self._np_sources = []
+        self._view_order_np = None
+        self._x_final_np = None
+        self._source_x_cache = {}
+        if self._use_numpy:
+            self._np_sources = [NumpyPngSource(source) for source in self.sources]
+            self._view_order_np = _np.array(self.view_order, dtype=_np.int16)
+            self._x_final_np = _np.arange(self.width_px, dtype=_np.float64)
 
     def _sample_channel(self, final_x: int, final_y: int, channel: int) -> int:
         view = interlace_view_index(
@@ -649,12 +825,77 @@ class InterlaceRenderer:
         return source.sample_bilinear(source_x, source_y)[channel]
 
     def generate_final_row(self, y: int) -> bytes:
+        if self._use_numpy:
+            return self._generate_final_row_numpy(y)
         row = bytearray(self.width_px * 3)
         for x in range(self.width_px):
             target = x * 3
             for channel in range(3):
                 row[target + channel] = self._sample_channel(x, y, channel)
         return bytes(row)
+
+    def _source_x_arrays(self, source: NumpyPngSource):
+        key = source.width
+        cached = self._source_x_cache.get(key)
+        if cached is not None:
+            return cached
+        if self.width_px <= 1:
+            x_float = _np.zeros(self.width_px, dtype=_np.float32)
+        else:
+            x_float = self._x_final_np * ((source.width - 1) / float(self.width_px - 1))
+        x0 = _np.floor(x_float).astype(_np.int64)
+        x1 = _np.minimum(source.width - 1, x0 + 1)
+        tx = (x_float - x0).astype(_np.float32)
+        cached = (x0, x1, tx)
+        self._source_x_cache[key] = cached
+        return cached
+
+    def _source_y_values(self, source: NumpyPngSource, final_y: int):
+        if self.height_px <= 1:
+            y_float = 0.0
+        else:
+            y_float = final_y * (source.height - 1) / float(self.height_px - 1)
+        y0 = int(math.floor(y_float))
+        y1 = min(source.height - 1, y0 + 1)
+        ty = float(y_float - y0)
+        return y0, y1, ty
+
+    def _view_indices_numpy(self, y: int, channel: int):
+        d_value = (
+            3.0 * self._x_final_np
+            + 3.0 * float(y) * math.tan(self.angle_radians)
+            + float(channel)
+            + float(self.settings.interlace.offset)
+        )
+        a_value = _np.mod(d_value, float(self.settings.interlace.pe))
+        view = _np.floor(a_value / (float(self.settings.interlace.pe) / self.settings.camera_count)).astype(_np.int16)
+        return self._view_order_np[_np.mod(view, self.settings.camera_count)]
+
+    def _generate_final_row_numpy(self, y: int) -> bytes:
+        row = _np.empty((self.width_px, 3), dtype=_np.uint8)
+        for channel in range(3):
+            source_indices = self._view_indices_numpy(y, channel)
+            output_channel = row[:, channel]
+            for source_index in _np.unique(source_indices):
+                mask = source_indices == source_index
+                if not bool(mask.any()):
+                    continue
+                source = self._np_sources[int(source_index)]
+                x0, x1, tx = self._source_x_arrays(source)
+                y0, y1, ty = self._source_y_values(source, y)
+                idx = _np.nonzero(mask)[0]
+                tx_masked = tx[idx]
+                top = (
+                    source.array[y0, x0[idx], channel].astype(_np.float32) * (1.0 - tx_masked)
+                    + source.array[y0, x1[idx], channel].astype(_np.float32) * tx_masked
+                )
+                bottom = (
+                    source.array[y1, x0[idx], channel].astype(_np.float32) * (1.0 - tx_masked)
+                    + source.array[y1, x1[idx], channel].astype(_np.float32) * tx_masked
+                )
+                values = _np.rint(top * (1.0 - ty) + bottom * ty).clip(0, 255).astype(_np.uint8)
+                output_channel[idx] = values
+        return row.tobytes()
 
     def generate_preview_row(self, preview_y: int, preview_width: int, preview_height: int) -> bytes:
         row = bytearray(preview_width * 3)
@@ -748,19 +989,30 @@ def generate_delivery_outputs(
 
     try:
         _emit_progress(progress_callback, "加载源视角", 0, settings.camera_count)
-        renderer = InterlaceRenderer(source_paths, settings, width_px, height_px)
+        renderer = InterlaceRenderer(
+            source_paths,
+            settings,
+            width_px,
+            height_px,
+            progress_callback=progress_callback,
+            stop_callback=stop_callback,
+        )
         halftoner = StreamingHalftoner(width_px, settings.halftone, settings.ppi)
+        stage = "生成交织 TIFF 和 1-bit TIFF"
 
         _emit_progress(progress_callback, "生成交织 TIFF 和 1-bit TIFF", 0, height_px)
         with RgbTiffWriter(_tmp_path(paths.interlaced_tiff), width_px, height_px, settings.ppi) as rgb_writer, \
                 OneBitTiffWriter(_tmp_path(paths.film_1bit_tiff), width_px, height_px, settings.ppi) as bit_writer:
-            progress_step = max(1, height_px // 100)
+            progress_step = max(1, height_px // 1000)
+            last_progress_time = 0.0
             for y in range(height_px):
                 _check_stop(stop_callback)
                 row = renderer.generate_final_row(y)
                 rgb_writer.write_row(row)
                 bit_writer.write_black_row(halftoner.process_rgb_row(y, row))
-                if y % progress_step == 0 or y == height_px - 1:
+                now = time.perf_counter()
+                if y % progress_step == 0 or y == height_px - 1 or now - last_progress_time >= 0.5:
+                    last_progress_time = now
                     _emit_progress(
                         progress_callback,
                         "生成交织 TIFF 和 1-bit TIFF",
