@@ -188,7 +188,7 @@ def main():
     props.interlace_angle = 0.0
     props.interlace_offset = 0.0
     props.interlace_reverse_views = False
-    props.film_halftone_method = "FM"
+    props.film_halftone_method = "AM"
     props.delivery_write_interlaced_tiff = False
 
     result = bpy.ops.lightfield.generate_delivery()

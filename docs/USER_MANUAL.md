@@ -178,7 +178,7 @@ Safety behavior:
 - If camera or output settings are dirty, the add-on applies them and rerenders source views.
 - If the final output exceeds 100 megapixels, `确认生成大图` must be checked.
 - Very large deliverables can still take a long time if `输出连续调 interlaced.tif` is enabled. `194 x 345 mm @ 4000 PPI` is about `30551 x 54331` pixels, roughly 5 GB for the continuous RGB TIFF alone, so the add-on uses BigTIFF and reports row progress while writing.
-- Release ZIPs bundle Blender-compatible NumPy and the Windows native accelerator by default. If both are available, AM delivery with zero-degree interlace uses the native path for high-resolution film output.
+- Release ZIPs bundle Blender-compatible NumPy and the Windows native accelerator by default. If both are available, AM delivery with zero-degree interlace uses the native path for high-resolution film output. The native accelerator uses Windows system threads and does not require Visual Studio, OpenMP, or `VCOMP140.DLL` on the user machine.
 - If the final output is more than 2x larger than the source-view resolution on either axis, the panel warns that clarity may be insufficient.
 - Failed or stopped generation removes temporary `.tmp` files and writes `delivery_error.log`.
 

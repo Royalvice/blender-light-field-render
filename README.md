@@ -13,9 +13,9 @@ The repository is now organized around the Blender add-on. The older Three.js vi
 - Supports animation rendering across all cameras and a selected frame range.
 - Supports PNG, continuous TIFF, and halftoned 1-bit Film TIFF output.
 - Generates final delivery interlace files from customer physical size in mm plus PPI.
-- Outputs full-size continuous interlaced TIFF, 2048px preview PNG, 1-bit film TIFF, and a JSON manifest.
+- Outputs 2048px preview PNG, 1-bit film TIFF, and a JSON manifest by default, with optional full-size continuous interlaced TIFF.
 - Automatically writes BigTIFF for continuous interlaced output when the file exceeds classic TIFF limits.
-- Uses NumPy acceleration when available; release ZIPs can bundle Blender-compatible NumPy for no-install use.
+- Uses bundled NumPy and a Windows native accelerator for large AM film delivery; no user Python package install is required.
 - Avoids UI stalls by deferring heavy camera-array updates while sliders are dragged.
 - Tracks render progress and can resume from existing output files.
 
@@ -29,7 +29,7 @@ The repository is now organized around the Blender add-on. The older Three.js vi
 Use the release ZIP asset named like:
 
 ```text
-light_field_render-v0.1.10.zip
+light_field_render-v0.1.12.zip
 ```
 
 Then install it in Blender:
@@ -87,11 +87,13 @@ output_path/
       delivery_manifest.json
 ```
 
+`interlaced.tif` is optional and disabled by default for large-delivery speed. Leave `输出连续调 interlaced.tif` off when the factory only needs the final 1-bit film TIFF plus preview; enable it when a continuous-tone interlaced BigTIFF is needed for debugging or vendor handoff.
+
 This avoids forcing Blender to render every camera at the final print resolution.
 
 For very large delivery sizes, the add-on switches `interlaced.tif` to BigTIFF automatically. For example, `194 x 345 mm @ 4000 PPI` is about `30551 x 54331` pixels, so the RGB continuous TIFF is roughly 5 GB and cannot be represented by classic TIFF.
 
-The large-delivery path has been stress-tested with 150 source views at `2160 x 3651`, `194 x 345 mm @ 4000 PPI`, `PE=52.64`, and AM `200 LPI / 45°`. On the test workstation, complete interlace, 1-bit halftone, BigTIFF writing, and preview generation took about 292 seconds with about 3.95 GB peak private memory.
+The large-delivery path has been stress-tested with 150 source views at `2160 x 3651`, `194 x 345 mm @ 4000 PPI`, `PE=52.64`, and AM `200 LPI / 45°`. On the test workstation, fast film mode generated `film_1bit.tif`, preview, and manifest in about 9.8 seconds. Enabling optional continuous-tone `interlaced.tif` writes an additional roughly 5 GB BigTIFF and is limited mainly by disk write speed.
 
 ## Build Release ZIP
 

@@ -32,7 +32,7 @@ $cmdPath = [System.IO.Path]::GetTempFileName() + ".cmd"
 Set-Content -LiteralPath $cmdPath -Encoding ASCII -Value @"
 @echo on
 call "$vcvars"
-cl /nologo /O2 /GL /LD /openmp "$sourcePath" /Fe"$outputPath" /link /LTCG
+cl /nologo /O2 /GL /LD "$sourcePath" /Fe"$outputPath" /link /LTCG
 "@
 try {
     cmd.exe /c "`"$cmdPath`""

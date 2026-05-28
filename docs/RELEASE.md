@@ -47,27 +47,27 @@ Use this checklist when publishing a GitHub Release.
 Recommended tag format:
 
 ```text
-v0.1.11
+v0.1.12
 ```
 
 Recommended title:
 
 ```text
-Light Field Render v0.1.11
+Light Field Render v0.1.12
 ```
 
 Release asset:
 
 ```text
-dist/light_field_render-v0.1.11.zip
+dist/light_field_render-v0.1.12.zip
 ```
 
 Suggested release notes:
 
 ```markdown
-## Light Field Render v0.1.11
+## Light Field Render v0.1.12
 
-Native large-delivery acceleration and fast film-output release.
+Portable native large-delivery acceleration and fast film-output release.
 
 ### Features
 
@@ -90,14 +90,15 @@ Native large-delivery acceleration and fast film-output release.
 - Adds large-output confirmation, source-upscale warning, progress/status reporting, and error-log output.
 - Automatically writes BigTIFF when continuous interlaced RGB output exceeds classic TIFF 32-bit limits.
 - Adds native Windows acceleration for same-dimension, zero-degree AM delivery generation.
+- Native acceleration uses Windows system threads and depends only on `KERNEL32.dll`; it does not require Visual Studio, OpenMP, or `VCOMP140.DLL` on user machines.
 - Adds optional NumPy acceleration and bundles it in release ZIPs by default.
 - Speeds up RGB/filter-0 PNG source loading and same-dimension source-view row sampling.
 - Bundles Blender-compatible NumPy and the Windows native accelerator in release ZIPs by default for no-install user setup.
 - Adds Blender status-bar progress updates for rendering and delivery generation.
-- Stress-tested `194 x 345 mm @ 4000 PPI` with 150 source views at `2160 x 3651`: fast film mode generated `film_1bit.tif`, preview, and manifest in about 10.2 seconds on the test workstation.
+- Stress-tested `194 x 345 mm @ 4000 PPI` with 150 source views at `2160 x 3651`: fast film mode generated `film_1bit.tif`, preview, and manifest in about 9.8 seconds on the test workstation.
 - With optional continuous-tone `interlaced.tif` enabled, the same stress test generated the 4.98 GB BigTIFF plus 1-bit TIFF and preview in about 32.2 seconds; the remaining cost is dominated by writing the 4.98 GB RGB TIFF.
 
 ### Installation
 
-Download `light_field_render-v0.1.11.zip`, then install it from Blender via `Edit > Preferences > Add-ons > Install...`.
+Download `light_field_render-v0.1.12.zip`, then install it from Blender via `Edit > Preferences > Add-ons > Install...`.
 ```
