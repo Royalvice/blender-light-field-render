@@ -29,7 +29,7 @@ The repository is now organized around the Blender add-on. The older Three.js vi
 Use the release ZIP asset named like:
 
 ```text
-light_field_render-v0.1.13.zip
+light_field_render-v0.1.14.zip
 ```
 
 Then install it in Blender:
@@ -75,7 +75,7 @@ The `最终交付输出` panel separates Blender source-view rendering from the 
 - `交付高度 mm`
 - `PPI`
 
-The add-on calculates the final pixel size as `round(mm / 25.4 * PPI)`. `生成当前帧交付文件` renders or reuses the current frame source views, interlaces them with the PE/Angle/Offset parameters, and writes:
+The add-on calculates the final pixel size as `round(mm / 25.4 * PPI)`. `生成当前帧交付文件` renders or reuses the current frame source views, interlaces them with the PE/Angle/Offset parameters, and writes the final film-delivery files:
 
 ```text
 output_path/
@@ -88,6 +88,8 @@ output_path/
 ```
 
 `interlaced.tif` is optional and disabled by default for large-delivery speed. Leave `输出连续调 interlaced.tif` off when the factory only needs the final 1-bit film TIFF plus preview; enable it when a continuous-tone interlaced BigTIFF is needed for debugging or vendor handoff.
+
+Use `只生成连续调交织图` when you only need the continuous-tone interlaced image. That button writes `interlaced.tif`, `interlaced_preview.png`, and `delivery_manifest.json`, and it intentionally skips halftoning and `film_1bit.tif`.
 
 This avoids forcing Blender to render every camera at the final print resolution.
 

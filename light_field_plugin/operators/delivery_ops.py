@@ -68,8 +68,15 @@ def _invalid_source_indices(paths: list[str], width: int, height: int) -> list[i
     return [i for i, path in enumerate(paths) if not _source_is_valid(path, width, height)]
 
 
-def _build_delivery_settings(context) -> DeliverySettings:
+def _build_delivery_settings(
+    context,
+    *,
+    write_interlaced_tiff: bool | None = None,
+    write_film_tiff: bool = True,
+) -> DeliverySettings:
     props = context.scene.light_field_props
+    if write_interlaced_tiff is None:
+        write_interlaced_tiff = props.delivery_write_interlaced_tiff
     return DeliverySettings(
         width_mm=props.delivery_width_mm,
         height_mm=props.delivery_height_mm,
@@ -93,7 +100,8 @@ def _build_delivery_settings(context) -> DeliverySettings:
         ),
         plugin_version=_plugin_version_string(),
         confirm_large_output=props.delivery_confirm_large_output,
-        write_interlaced_tiff=props.delivery_write_interlaced_tiff,
+        write_interlaced_tiff=write_interlaced_tiff,
+        write_film_tiff=write_film_tiff,
     )
 
 
@@ -153,12 +161,7 @@ def _render_single_source_view(context, frame_dir: str, camera_index: int) -> No
     _safe_redraw()
 
 
-class LIGHTFIELD_OT_generate_delivery(Operator):
-    bl_idname = "lightfield.generate_delivery"
-    bl_label = "生成当前帧交付文件"
-    bl_description = "渲染或复用当前帧多视角源图，并生成最终交织图与 1-bit 菲林 TIFF"
-    bl_options = {"REGISTER"}
-
+class _DeliveryRunnerMixin:
     def execute(self, context):
         if bpy.app.background or context.window is None:
             return self._execute_blocking(context)
@@ -168,7 +171,7 @@ class LIGHTFIELD_OT_generate_delivery(Operator):
         self.scene = context.scene
         self.props = context.scene.light_field_props
         self.output_root = bpy.path.abspath(self.props.output_path)
-        self.settings = _build_delivery_settings(context)
+        self.settings = self._build_settings(context)
         self.paths = make_delivery_paths(self.output_root, self.scene.frame_current)
         self.current_stage = "准备参数"
         self.captured = None
@@ -176,6 +179,9 @@ class LIGHTFIELD_OT_generate_delivery(Operator):
         self.start_time = time.perf_counter()
         self.wm = context.window_manager
         self.wm_progress_active = False
+
+    def _build_settings(self, context) -> DeliverySettings:
+        return _build_delivery_settings(context)
 
     def _progress(self, stage: str, current: int, total: int, info: str = "") -> None:
         self.current_stage = stage
@@ -407,7 +413,8 @@ class LIGHTFIELD_OT_generate_delivery(Operator):
             self._stop_event.set()
 
     def _start_worker(self):
-        self._progress("准备后台交织/挂网", 0, 1, "UI 可继续响应，可点停止")
+        worker_stage = "准备后台交织/挂网" if self.settings.write_film_tiff else "准备后台交织"
+        self._progress(worker_stage, 0, 1, "UI 可继续响应，可点停止")
 
         def progress(stage: str, current: int, total: int, info: str = "") -> None:
             with self._worker_lock:
@@ -466,6 +473,27 @@ class LIGHTFIELD_OT_generate_delivery(Operator):
         if _ACTIVE_DELIVERY_OPERATOR is self:
             _ACTIVE_DELIVERY_OPERATOR = None
         self._cleanup(context, reset_stop=reset_stop)
+
+
+class LIGHTFIELD_OT_generate_delivery(_DeliveryRunnerMixin, Operator):
+    bl_idname = "lightfield.generate_delivery"
+    bl_label = "生成当前帧交付文件"
+    bl_description = "渲染或复用当前帧多视角源图，并生成最终交织图与 1-bit 菲林 TIFF"
+    bl_options = {"REGISTER"}
+
+
+class LIGHTFIELD_OT_generate_interlaced(_DeliveryRunnerMixin, Operator):
+    bl_idname = "lightfield.generate_interlaced"
+    bl_label = "生成连续调交织图"
+    bl_description = "只生成连续调 interlaced.tif、预览和 manifest，不执行挂网，不输出 film_1bit.tif"
+    bl_options = {"REGISTER"}
+
+    def _build_settings(self, context) -> DeliverySettings:
+        return _build_delivery_settings(
+            context,
+            write_interlaced_tiff=True,
+            write_film_tiff=False,
+        )
 
 
 class LIGHTFIELD_OT_stop_delivery(Operator):

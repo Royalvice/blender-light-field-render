@@ -123,6 +123,7 @@ class DeliverySettings:
     large_output_pixels: int = LARGE_OUTPUT_PIXELS
     confirm_large_output: bool = False
     write_interlaced_tiff: bool = True
+    write_film_tiff: bool = True
 
 
 @dataclass
@@ -1037,7 +1038,7 @@ class NativeAmBatchGenerator:
             raise DeliveryError("Native batch generation DLL is not available")
         if not renderer._same_source_dimensions:
             raise DeliveryError("Native batch generation requires equal source dimensions")
-        if (settings.halftone.method or "FM").upper() != "AM":
+        if settings.write_film_tiff and (settings.halftone.method or "FM").upper() != "AM":
             raise DeliveryError("Native batch generation currently supports AM halftone only")
 
         self.settings = settings
@@ -1096,7 +1097,7 @@ class NativeAmBatchGenerator:
             native_available()
             and renderer._same_source_dimensions
             and abs(float(settings.interlace.angle_degrees)) < 1.0e-9
-            and (settings.halftone.method or "FM").upper() == "AM"
+            and (not settings.write_film_tiff or (settings.halftone.method or "FM").upper() == "AM")
         )
 
     @staticmethod
@@ -1105,9 +1106,9 @@ class NativeAmBatchGenerator:
             return ctypes.POINTER(ctype)()
         return array.ctypes.data_as(ctypes.POINTER(ctype))
 
-    def generate(self, y_start: int, rows: int, include_rgb: bool = True):
+    def generate(self, y_start: int, rows: int, include_rgb: bool = True, include_bits: bool = True):
         rgb = _np.empty((rows, self.width, 3), dtype=_np.uint8) if include_rgb else None
-        bits = _np.empty((rows, self.row_bytes), dtype=_np.uint8)
+        bits = _np.empty((rows, self.row_bytes), dtype=_np.uint8) if include_bits else None
         result = self.dll.lf_generate_am_batch(
             self._ptr(self.source_stack, ctypes.c_uint8),
             self.source_count,
@@ -1254,11 +1255,17 @@ def generate_delivery_outputs(
 
     paths = make_delivery_paths(output_root, settings.frame)
     os.makedirs(paths.output_dir, exist_ok=True)
+    if not settings.write_interlaced_tiff and not settings.write_film_tiff:
+        raise DeliveryError("At least one delivery output must be enabled")
     tmp_files = [
         _tmp_path(paths.preview_png),
-        _tmp_path(paths.film_1bit_tiff),
         _tmp_path(paths.manifest_json),
     ]
+    if settings.write_film_tiff:
+        tmp_files.append(_tmp_path(paths.film_1bit_tiff))
+    else:
+        _remove_if_exists(paths.film_1bit_tiff)
+        _remove_if_exists(_tmp_path(paths.film_1bit_tiff))
     if settings.write_interlaced_tiff:
         tmp_files.append(_tmp_path(paths.interlaced_tiff))
     else:
@@ -1277,10 +1284,15 @@ def generate_delivery_outputs(
             progress_callback=progress_callback,
             stop_callback=stop_callback,
         )
-        halftoner = StreamingHalftoner(width_px, settings.halftone, settings.ppi)
-        stage = "生成交织 TIFF 和 1-bit TIFF"
+        halftoner = StreamingHalftoner(width_px, settings.halftone, settings.ppi) if settings.write_film_tiff else None
+        if settings.write_interlaced_tiff and settings.write_film_tiff:
+            stage = "生成交织 TIFF 和 1-bit TIFF"
+        elif settings.write_interlaced_tiff:
+            stage = "生成交织 TIFF"
+        else:
+            stage = "生成 1-bit TIFF"
 
-        _emit_progress(progress_callback, "生成交织 TIFF 和 1-bit TIFF", 0, height_px)
+        _emit_progress(progress_callback, stage, 0, height_px)
         native_used = False
         native_generator = None
         if NativeAmBatchGenerator.can_use(renderer, settings):
@@ -1292,9 +1304,11 @@ def generate_delivery_outputs(
                     rgb_writer = stack.enter_context(
                         RgbTiffWriter(_tmp_path(paths.interlaced_tiff), width_px, height_px, settings.ppi)
                     )
-                bit_writer = stack.enter_context(
-                    OneBitTiffWriter(_tmp_path(paths.film_1bit_tiff), width_px, height_px, settings.ppi)
-                )
+                bit_writer = None
+                if settings.write_film_tiff:
+                    bit_writer = stack.enter_context(
+                        OneBitTiffWriter(_tmp_path(paths.film_1bit_tiff), width_px, height_px, settings.ppi)
+                    )
                 last_progress_time = 0.0
                 for y in range(0, height_px, batch_rows):
                     _check_stop(stop_callback)
@@ -1303,10 +1317,12 @@ def generate_delivery_outputs(
                         y,
                         rows,
                         include_rgb=settings.write_interlaced_tiff,
+                        include_bits=settings.write_film_tiff,
                     )
                     if rgb_writer is not None:
                         rgb_writer.write_rows(rgb_batch, rows)
-                    bit_writer.write_packed_rows(bit_batch, rows)
+                    if bit_writer is not None:
+                        bit_writer.write_packed_rows(bit_batch, rows)
                     now = time.perf_counter()
                     if y == 0 or y + rows >= height_px or now - last_progress_time >= 0.5:
                         last_progress_time = now
@@ -1325,9 +1341,11 @@ def generate_delivery_outputs(
                     rgb_writer = stack.enter_context(
                         RgbTiffWriter(_tmp_path(paths.interlaced_tiff), width_px, height_px, settings.ppi)
                     )
-                bit_writer = stack.enter_context(
-                    OneBitTiffWriter(_tmp_path(paths.film_1bit_tiff), width_px, height_px, settings.ppi)
-                )
+                bit_writer = None
+                if settings.write_film_tiff:
+                    bit_writer = stack.enter_context(
+                        OneBitTiffWriter(_tmp_path(paths.film_1bit_tiff), width_px, height_px, settings.ppi)
+                    )
                 progress_step = max(1, height_px // 1000)
                 last_progress_time = 0.0
                 for y in range(height_px):
@@ -1335,16 +1353,17 @@ def generate_delivery_outputs(
                     row = renderer.generate_final_row(y)
                     if rgb_writer is not None:
                         rgb_writer.write_row(row)
-                    bit_writer.write_black_row(halftoner.process_rgb_row(y, row))
+                    if bit_writer is not None:
+                        bit_writer.write_black_row(halftoner.process_rgb_row(y, row))
                     now = time.perf_counter()
                     if y % progress_step == 0 or y == height_px - 1 or now - last_progress_time >= 0.5:
                         last_progress_time = now
                         _emit_progress(
                             progress_callback,
-                            "生成交织 TIFF 和 1-bit TIFF",
+                            stage,
                             y + 1,
                             height_px,
-                            f"{y + 1}/{height_px} | Python {(settings.halftone.method or 'FM').upper()}",
+                            f"{y + 1}/{height_px} | Python {(settings.halftone.method or 'FM').upper() if settings.write_film_tiff else 'RGB'}",
                         )
 
         preview_width, preview_height = preview_dimensions(width_px, height_px, settings.preview_max_edge)
@@ -1380,7 +1399,8 @@ def generate_delivery_outputs(
 
         if settings.write_interlaced_tiff:
             os.replace(_tmp_path(paths.interlaced_tiff), paths.interlaced_tiff)
-        os.replace(_tmp_path(paths.film_1bit_tiff), paths.film_1bit_tiff)
+        if settings.write_film_tiff:
+            os.replace(_tmp_path(paths.film_1bit_tiff), paths.film_1bit_tiff)
         os.replace(_tmp_path(paths.preview_png), paths.preview_png)
         os.replace(_tmp_path(paths.manifest_json), paths.manifest_json)
         _remove_if_exists(paths.error_log)
@@ -1406,6 +1426,7 @@ def build_manifest(settings: DeliverySettings, result: DeliveryResult, source_pa
             "preview_width_px": result.preview_width,
             "preview_height_px": result.preview_height,
             "write_interlaced_tiff": settings.write_interlaced_tiff,
+            "write_film_tiff": settings.write_film_tiff,
         },
         "source_views": {
             "camera_count": settings.camera_count,
@@ -1426,7 +1447,7 @@ def build_manifest(settings: DeliverySettings, result: DeliveryResult, source_pa
         "files": {
             "interlaced_tiff": os.path.basename(result.paths.interlaced_tiff) if settings.write_interlaced_tiff else None,
             "preview_png": os.path.basename(result.paths.preview_png),
-            "film_1bit_tiff": os.path.basename(result.paths.film_1bit_tiff),
+            "film_1bit_tiff": os.path.basename(result.paths.film_1bit_tiff) if settings.write_film_tiff else None,
             "manifest_json": os.path.basename(result.paths.manifest_json),
         },
         "elapsed_seconds": result.elapsed_seconds,

@@ -222,6 +222,17 @@ def main():
     assert manifest["delivery"]["write_interlaced_tiff"] is True, manifest["delivery"]
     assert manifest["files"]["interlaced_tiff"] == "interlaced.tif", manifest["files"]
 
+    result = bpy.ops.lightfield.generate_interlaced()
+    assert result == {"FINISHED"}, result
+    assert interlaced.exists(), f"Missing {interlaced}"
+    assert not film.exists(), f"Interlaced-only output should remove {film}"
+    assert_rgb_tiff(interlaced, 20, 10)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["delivery"]["write_interlaced_tiff"] is True, manifest["delivery"]
+    assert manifest["delivery"]["write_film_tiff"] is False, manifest["delivery"]
+    assert manifest["files"]["interlaced_tiff"] == "interlaced.tif", manifest["files"]
+    assert manifest["files"]["film_1bit_tiff"] is None, manifest["files"]
+
     props.delivery_width_mm = 1000
     props.delivery_height_mm = 1000
     props.delivery_ppi = 1000

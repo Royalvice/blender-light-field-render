@@ -273,6 +273,7 @@ class LIGHTFIELD_PT_delivery_output(Panel):
             if props.delivery_info:
                 box.label(text=props.delivery_info)
         else:
+            col.operator("lightfield.generate_interlaced", text="只生成连续调交织图", icon="IMAGE_DATA")
             col.operator("lightfield.generate_delivery", text="生成当前帧交付文件", icon="RENDER_RESULT")
             if props.delivery_last_output_dir:
                 layout.label(text=f"最近输出: {props.delivery_last_output_dir}", icon="FILE_FOLDER")

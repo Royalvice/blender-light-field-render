@@ -61,8 +61,10 @@ static void lf_process_rows(const LfBatchJob* job) {
         const float wy0 = 1.0f - ty;
 
         uint8_t* rgb_row = job->rgb_out ? job->rgb_out + (int64_t)row * job->final_width * 3 : 0;
-        uint8_t* bit_row = job->bit_out + (int64_t)row * job->row_bytes;
-        memset(bit_row, 0, (size_t)job->row_bytes);
+        uint8_t* bit_row = job->bit_out ? job->bit_out + (int64_t)row * job->row_bytes : 0;
+        if (bit_row) {
+            memset(bit_row, 0, (size_t)job->row_bytes);
+        }
 
         for (int x = 0; x < job->final_width; ++x) {
             uint8_t rgb[3];
@@ -92,40 +94,42 @@ static void lf_process_rows(const LfBatchJob* job) {
                 rgb_row[target + 2] = rgb[2];
             }
 
-            const double luma = 0.2126 * (double)rgb[0] + 0.7152 * (double)rgb[1] + 0.0722 * (double)rgb[2];
-            double luma_norm = luma / 255.0;
-            if (luma_norm < 0.0) luma_norm = 0.0;
-            if (luma_norm > 1.0) luma_norm = 1.0;
-            if (job->use_gamma) {
-                luma_norm = pow(luma_norm, job->inv_gamma);
-            }
-            const double darkness = 1.0 - luma_norm;
-            int is_black = 0;
-            if (darkness >= 1.0) {
-                is_black = 1;
-            } else if (darkness > 0.0) {
-                const double xr = (double)x * job->screen_cos + (double)final_y * job->screen_sin;
-                const double yr = -(double)x * job->screen_sin + (double)final_y * job->screen_cos;
-                const double fx = xr / job->cell_size;
-                const double fy = yr / job->cell_size;
-                const double u = (fx - floor(fx)) * 2.0 - 1.0;
-                const double v = (fy - floor(fy)) * 2.0 - 1.0;
-                double metric;
-                double threshold;
-                if (job->dot_shape == 1) {
-                    metric = (fabs(u) + fabs(v)) / 2.0;
-                    threshold = darkness;
-                } else if (job->dot_shape == 2) {
-                    metric = sqrt(u * u + (v / 0.65) * (v / 0.65));
-                    threshold = sqrt(darkness);
-                } else {
-                    metric = sqrt(u * u + v * v);
-                    threshold = sqrt(darkness);
+            if (bit_row) {
+                const double luma = 0.2126 * (double)rgb[0] + 0.7152 * (double)rgb[1] + 0.0722 * (double)rgb[2];
+                double luma_norm = luma / 255.0;
+                if (luma_norm < 0.0) luma_norm = 0.0;
+                if (luma_norm > 1.0) luma_norm = 1.0;
+                if (job->use_gamma) {
+                    luma_norm = pow(luma_norm, job->inv_gamma);
                 }
-                is_black = metric <= threshold;
-            }
-            if (is_black) {
-                bit_row[x >> 3] |= (uint8_t)(0x80 >> (x & 7));
+                const double darkness = 1.0 - luma_norm;
+                int is_black = 0;
+                if (darkness >= 1.0) {
+                    is_black = 1;
+                } else if (darkness > 0.0) {
+                    const double xr = (double)x * job->screen_cos + (double)final_y * job->screen_sin;
+                    const double yr = -(double)x * job->screen_sin + (double)final_y * job->screen_cos;
+                    const double fx = xr / job->cell_size;
+                    const double fy = yr / job->cell_size;
+                    const double u = (fx - floor(fx)) * 2.0 - 1.0;
+                    const double v = (fy - floor(fy)) * 2.0 - 1.0;
+                    double metric;
+                    double threshold;
+                    if (job->dot_shape == 1) {
+                        metric = (fabs(u) + fabs(v)) / 2.0;
+                        threshold = darkness;
+                    } else if (job->dot_shape == 2) {
+                        metric = sqrt(u * u + (v / 0.65) * (v / 0.65));
+                        threshold = sqrt(darkness);
+                    } else {
+                        metric = sqrt(u * u + v * v);
+                        threshold = sqrt(darkness);
+                    }
+                    is_black = metric <= threshold;
+                }
+                if (is_black) {
+                    bit_row[x >> 3] |= (uint8_t)(0x80 >> (x & 7));
+                }
             }
         }
     }
@@ -161,7 +165,7 @@ LF_EXPORT int lf_generate_am_batch(
     uint8_t* bit_out,
     int row_bytes
 ) {
-    if (!sources || !view_map || !x0_map || !x1_map || !tx_map || !bit_out) {
+    if (!sources || !view_map || !x0_map || !x1_map || !tx_map || (!rgb_out && !bit_out)) {
         return 1;
     }
     if (source_count <= 0 || source_width <= 0 || source_height <= 0 ||

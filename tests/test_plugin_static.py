@@ -8,9 +8,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class PluginStaticTests(unittest.TestCase):
-    def test_version_is_0_1_13(self):
+    def test_version_is_0_1_14(self):
         init_text = (REPO_ROOT / "light_field_plugin" / "__init__.py").read_text(encoding="utf-8")
-        self.assertIn('"version": (0, 1, 13)', init_text)
+        self.assertIn('"version": (0, 1, 14)', init_text)
 
     def test_panel_labels_are_localized_in_chinese(self):
         text = (REPO_ROOT / "light_field_plugin" / "panels" / "main_panel.py").read_text(encoding="utf-8")
@@ -22,6 +22,7 @@ class PluginStaticTests(unittest.TestCase):
             'text="输出格式"',
             'text="渲染当前帧"',
             'text="渲染动画"',
+            'text="只生成连续调交织图"',
             'text="生成当前帧交付文件"',
             'text="停止交付生成"',
         ):
@@ -63,6 +64,7 @@ class PluginStaticTests(unittest.TestCase):
         delivery_text = (REPO_ROOT / "light_field_plugin" / "operators" / "delivery_ops.py").read_text(encoding="utf-8")
         for snippet in (
             'bl_label = "生成当前帧交付文件"',
+            'bl_label = "生成连续调交织图"',
             'bl_label = "停止交付生成"',
             '"交付文件已生成:',
         ):

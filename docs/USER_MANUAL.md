@@ -146,7 +146,7 @@ Workflow:
    - `Offset`: original formula offset.
    - `反转视角顺序`: maps view 0 to `camera_N-1` when enabled.
 4. Configure the existing `1-bit 菲林 TIFF` halftone settings if film output is needed.
-5. Click `生成当前帧交付文件`.
+5. Click `生成当前帧交付文件` for film delivery, or click `只生成连续调交织图` when you only need the continuous-tone interlaced TIFF and do not want halftoning.
 
 The output folder is:
 
@@ -170,6 +170,8 @@ Files:
 - `interlaced_preview.png`: quick preview PNG with max edge 2048px.
 - `film_1bit.tif`: full-size single-channel 1-bit black/white TIFF using the selected FM/AM halftone settings.
 - `delivery_manifest.json`: records plugin version, frame, mm/PPI/pixel size, source resolution, camera count, interlace parameters, halftone parameters, warnings, file names, and elapsed time.
+
+`只生成连续调交织图` writes only `interlaced.tif`, `interlaced_preview.png`, and `delivery_manifest.json`; it removes stale `film_1bit.tif` from that frame folder so the output set is unambiguous.
 
 Safety behavior:
 
