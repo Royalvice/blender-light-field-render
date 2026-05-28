@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import ctypes
 import math
 import os
 import struct
@@ -14,6 +15,7 @@ import sys
 import time
 import traceback
 import zlib
+from contextlib import ExitStack
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Callable, Iterable, List, Optional, Sequence, Tuple
@@ -34,6 +36,50 @@ try:
     import numpy as _np
 except Exception:
     _np = None
+
+
+_NATIVE_DLL = None
+_NATIVE_DLL_ATTEMPTED = False
+
+
+def _load_native_dll():
+    global _NATIVE_DLL, _NATIVE_DLL_ATTEMPTED
+    if _NATIVE_DLL_ATTEMPTED:
+        return _NATIVE_DLL
+    _NATIVE_DLL_ATTEMPTED = True
+    dll_path = os.path.join(os.path.dirname(__file__), "lightfield_native.dll")
+    if not os.path.exists(dll_path):
+        return None
+    try:
+        dll = ctypes.CDLL(dll_path)
+        dll.lf_generate_am_batch.argtypes = [
+            ctypes.POINTER(ctypes.c_uint8),
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.POINTER(ctypes.c_int16),
+            ctypes.POINTER(ctypes.c_int32),
+            ctypes.POINTER(ctypes.c_int32),
+            ctypes.POINTER(ctypes.c_float),
+            ctypes.c_double,
+            ctypes.c_double,
+            ctypes.c_double,
+            ctypes.c_double,
+            ctypes.c_double,
+            ctypes.c_int,
+            ctypes.POINTER(ctypes.c_uint8),
+            ctypes.POINTER(ctypes.c_uint8),
+            ctypes.c_int,
+        ]
+        dll.lf_generate_am_batch.restype = ctypes.c_int
+        _NATIVE_DLL = dll
+    except Exception:
+        _NATIVE_DLL = None
+    return _NATIVE_DLL
 
 
 class DeliveryError(RuntimeError):
@@ -76,6 +122,7 @@ class DeliverySettings:
     preview_max_edge: int = PREVIEW_MAX_EDGE
     large_output_pixels: int = LARGE_OUTPUT_PIXELS
     confirm_large_output: bool = False
+    write_interlaced_tiff: bool = True
 
 
 @dataclass
@@ -392,6 +439,10 @@ def numpy_available() -> bool:
     return _np is not None
 
 
+def native_available() -> bool:
+    return _np is not None and _load_native_dll() is not None
+
+
 class RgbTiffWriter:
     def __init__(self, path: str, width: int, height: int, dpi: int, force_bigtiff: bool = False):
         self.path = path
@@ -504,6 +555,17 @@ class RgbTiffWriter:
             raise ValueError("TIFF RGB row length does not match image width")
         self._file.write(row)
         self._rows_written += 1
+
+    def write_rows(self, rows, row_count: int) -> None:
+        if self._file is None:
+            raise RuntimeError("TIFF writer is not open")
+        if row_count < 0:
+            raise ValueError("TIFF row count cannot be negative")
+        view = memoryview(rows)
+        if view.nbytes != self.width * 3 * row_count:
+            raise ValueError("TIFF RGB batch length does not match image width")
+        self._file.write(view)
+        self._rows_written += row_count
 
     def __exit__(self, exc_type, exc, tb):
         if self._file is not None:
@@ -640,6 +702,25 @@ class OneBitTiffWriter:
             packed.append(byte << (8 - bit_count))
         self._file.write(packed)
         self._rows_written += 1
+
+    def write_packed_row(self, packed_row: bytes) -> None:
+        if self._file is None:
+            raise RuntimeError("TIFF writer is not open")
+        if len(packed_row) != self.row_bytes:
+            raise ValueError("Packed 1-bit TIFF row length does not match image width")
+        self._file.write(packed_row)
+        self._rows_written += 1
+
+    def write_packed_rows(self, packed_rows, row_count: int) -> None:
+        if self._file is None:
+            raise RuntimeError("TIFF writer is not open")
+        if row_count < 0:
+            raise ValueError("1-bit TIFF row count cannot be negative")
+        view = memoryview(packed_rows)
+        if view.nbytes != self.row_bytes * row_count:
+            raise ValueError("Packed 1-bit TIFF batch length does not match image width")
+        self._file.write(view)
+        self._rows_written += row_count
 
     def __exit__(self, exc_type, exc, tb):
         if self._file is not None:
@@ -947,6 +1028,170 @@ class InterlaceRenderer:
         return bytes(row)
 
 
+class NativeAmBatchGenerator:
+    def __init__(self, renderer: InterlaceRenderer, settings: DeliverySettings):
+        if _np is None:
+            raise DeliveryError("Native batch generation requires NumPy")
+        self.dll = _load_native_dll()
+        if self.dll is None:
+            raise DeliveryError("Native batch generation DLL is not available")
+        if not renderer._same_source_dimensions:
+            raise DeliveryError("Native batch generation requires equal source dimensions")
+        if (settings.halftone.method or "FM").upper() != "AM":
+            raise DeliveryError("Native batch generation currently supports AM halftone only")
+
+        self.settings = settings
+        self.width = renderer.width_px
+        self.height = renderer.height_px
+        self.source_width = renderer._np_sources[0].width
+        self.source_height = renderer._np_sources[0].height
+        self.source_count = len(renderer._np_sources)
+        self.row_bytes = (self.width + 7) // 8
+        self.y_scale = 0.0 if self.height <= 1 else (self.source_height - 1) / float(self.height - 1)
+
+        self.source_stack = _np.empty(
+            (self.source_count, self.source_height, self.source_width, 3),
+            dtype=_np.uint8,
+        )
+        for index, source in enumerate(renderer._np_sources):
+            self.source_stack[index] = source.array
+        renderer.sources = []
+        renderer._np_sources = []
+        self._preview_cache = {}
+
+        x = _np.arange(self.width, dtype=_np.float64)
+        if self.width <= 1:
+            source_x = _np.zeros(self.width, dtype=_np.float64)
+        else:
+            source_x = x * ((self.source_width - 1) / float(self.width - 1))
+        self.x0 = _np.floor(source_x).astype(_np.int32)
+        self.x1 = _np.minimum(self.source_width - 1, self.x0 + 1).astype(_np.int32)
+        self.tx = (source_x - self.x0).astype(_np.float32)
+
+        view_map = _np.empty((3, self.width), dtype=_np.int16)
+        tan_angle = math.tan(renderer.angle_radians)
+        for channel in range(3):
+            d_value = (
+                3.0 * x
+                + 3.0 * 0.0 * tan_angle
+                + float(channel)
+                + float(settings.interlace.offset)
+            )
+            # The native fast path is used only for angle 0, so y does not affect view selection.
+            a_value = _np.mod(d_value, float(settings.interlace.pe))
+            view = _np.floor(a_value / (float(settings.interlace.pe) / settings.camera_count)).astype(_np.int16)
+            view_map[channel] = renderer._view_order_np[_np.mod(view, settings.camera_count)]
+        self.view_map = _np.ascontiguousarray(view_map)
+
+        angle = math.radians(settings.halftone.angle_degrees)
+        self.screen_cos = math.cos(angle)
+        self.screen_sin = math.sin(angle)
+        self.cell_size = max(2.0, float(settings.ppi) / max(1.0, float(settings.halftone.lpi)))
+        shape = (settings.halftone.dot_shape or "ROUND").upper()
+        self.dot_shape = {"ROUND": 0, "DIAMOND": 1, "ELLIPSE": 2}.get(shape, 0)
+
+    @classmethod
+    def can_use(cls, renderer: InterlaceRenderer, settings: DeliverySettings) -> bool:
+        return (
+            native_available()
+            and renderer._same_source_dimensions
+            and abs(float(settings.interlace.angle_degrees)) < 1.0e-9
+            and (settings.halftone.method or "FM").upper() == "AM"
+        )
+
+    @staticmethod
+    def _ptr(array, ctype):
+        if array is None:
+            return ctypes.POINTER(ctype)()
+        return array.ctypes.data_as(ctypes.POINTER(ctype))
+
+    def generate(self, y_start: int, rows: int, include_rgb: bool = True):
+        rgb = _np.empty((rows, self.width, 3), dtype=_np.uint8) if include_rgb else None
+        bits = _np.empty((rows, self.row_bytes), dtype=_np.uint8)
+        result = self.dll.lf_generate_am_batch(
+            self._ptr(self.source_stack, ctypes.c_uint8),
+            self.source_count,
+            self.source_width,
+            self.source_height,
+            self.width,
+            self.height,
+            int(y_start),
+            int(rows),
+            self._ptr(self.view_map, ctypes.c_int16),
+            self._ptr(self.x0, ctypes.c_int32),
+            self._ptr(self.x1, ctypes.c_int32),
+            self._ptr(self.tx, ctypes.c_float),
+            float(self.y_scale),
+            float(self.screen_cos),
+            float(self.screen_sin),
+            float(self.cell_size),
+            float(self.settings.halftone.gamma),
+            int(self.dot_shape),
+            self._ptr(rgb, ctypes.c_uint8),
+            self._ptr(bits, ctypes.c_uint8),
+            self.row_bytes,
+        )
+        if result != 0:
+            raise DeliveryError(f"Native batch generation failed with code {result}")
+        return rgb, bits
+
+    def _preview_maps(self, preview_width: int):
+        cached = self._preview_cache.get(preview_width)
+        if cached is not None:
+            return cached
+
+        if preview_width <= 1:
+            final_x = _np.zeros(preview_width, dtype=_np.float64)
+        else:
+            final_x = _np.rint(
+                _np.arange(preview_width, dtype=_np.float64)
+                * ((self.width - 1) / float(preview_width - 1))
+            )
+        source_x = final_x * ((self.source_width - 1) / float(self.width - 1)) if self.width > 1 else final_x
+        x0 = _np.floor(source_x).astype(_np.int64)
+        x1 = _np.minimum(self.source_width - 1, x0 + 1)
+        tx = (source_x - x0).astype(_np.float32)
+
+        view_map = _np.empty((3, preview_width), dtype=_np.int64)
+        for channel in range(3):
+            d_value = 3.0 * final_x + float(channel) + float(self.settings.interlace.offset)
+            a_value = _np.mod(d_value, float(self.settings.interlace.pe))
+            view = _np.floor(a_value / (float(self.settings.interlace.pe) / self.settings.camera_count)).astype(_np.int64)
+            if self.settings.interlace.reverse_views:
+                view = self.settings.camera_count - 1 - view
+            view_map[channel] = _np.mod(view, self.settings.camera_count)
+
+        cached = (x0, x1, tx, view_map)
+        self._preview_cache[preview_width] = cached
+        return cached
+
+    def generate_preview_row(self, preview_y: int, preview_width: int, preview_height: int) -> bytes:
+        if preview_height <= 1:
+            final_y = 0
+        else:
+            final_y = round_half_up(preview_y * (self.height - 1) / float(preview_height - 1))
+        final_y = max(0, min(self.height - 1, final_y))
+        source_y = final_y * self.y_scale
+        y0 = int(math.floor(source_y))
+        y1 = min(self.source_height - 1, y0 + 1)
+        ty = float(source_y - y0)
+        x0, x1, tx, view_map = self._preview_maps(preview_width)
+
+        row = _np.empty((preview_width, 3), dtype=_np.uint8)
+        for channel in range(3):
+            views = view_map[channel]
+            top = (
+                self.source_stack[views, y0, x0, channel].astype(_np.float32) * (1.0 - tx)
+                + self.source_stack[views, y0, x1, channel].astype(_np.float32) * tx
+            )
+            bottom = (
+                self.source_stack[views, y1, x0, channel].astype(_np.float32) * (1.0 - tx)
+                + self.source_stack[views, y1, x1, channel].astype(_np.float32) * tx
+            )
+            row[:, channel] = _np.rint(top * (1.0 - ty) + bottom * ty).clip(0, 255).astype(_np.uint8)
+        return row.tobytes()
+
+
 def make_delivery_paths(output_root: str, frame: int) -> DeliveryPaths:
     output_dir = os.path.join(output_root, "delivery", f"frame_{frame:04d}")
     return DeliveryPaths(
@@ -1010,11 +1255,15 @@ def generate_delivery_outputs(
     paths = make_delivery_paths(output_root, settings.frame)
     os.makedirs(paths.output_dir, exist_ok=True)
     tmp_files = [
-        _tmp_path(paths.interlaced_tiff),
         _tmp_path(paths.preview_png),
         _tmp_path(paths.film_1bit_tiff),
         _tmp_path(paths.manifest_json),
     ]
+    if settings.write_interlaced_tiff:
+        tmp_files.append(_tmp_path(paths.interlaced_tiff))
+    else:
+        _remove_if_exists(paths.interlaced_tiff)
+        _remove_if_exists(_tmp_path(paths.interlaced_tiff))
     for tmp in tmp_files:
         _remove_if_exists(tmp)
 
@@ -1032,25 +1281,71 @@ def generate_delivery_outputs(
         stage = "生成交织 TIFF 和 1-bit TIFF"
 
         _emit_progress(progress_callback, "生成交织 TIFF 和 1-bit TIFF", 0, height_px)
-        with RgbTiffWriter(_tmp_path(paths.interlaced_tiff), width_px, height_px, settings.ppi) as rgb_writer, \
-                OneBitTiffWriter(_tmp_path(paths.film_1bit_tiff), width_px, height_px, settings.ppi) as bit_writer:
-            progress_step = max(1, height_px // 1000)
-            last_progress_time = 0.0
-            for y in range(height_px):
-                _check_stop(stop_callback)
-                row = renderer.generate_final_row(y)
-                rgb_writer.write_row(row)
-                bit_writer.write_black_row(halftoner.process_rgb_row(y, row))
-                now = time.perf_counter()
-                if y % progress_step == 0 or y == height_px - 1 or now - last_progress_time >= 0.5:
-                    last_progress_time = now
-                    _emit_progress(
-                        progress_callback,
-                        "生成交织 TIFF 和 1-bit TIFF",
-                        y + 1,
-                        height_px,
-                        f"{y + 1}/{height_px}",
+        native_used = False
+        native_generator = None
+        if NativeAmBatchGenerator.can_use(renderer, settings):
+            native_generator = NativeAmBatchGenerator(renderer, settings)
+            batch_rows = 1024
+            with ExitStack() as stack:
+                rgb_writer = None
+                if settings.write_interlaced_tiff:
+                    rgb_writer = stack.enter_context(
+                        RgbTiffWriter(_tmp_path(paths.interlaced_tiff), width_px, height_px, settings.ppi)
                     )
+                bit_writer = stack.enter_context(
+                    OneBitTiffWriter(_tmp_path(paths.film_1bit_tiff), width_px, height_px, settings.ppi)
+                )
+                last_progress_time = 0.0
+                for y in range(0, height_px, batch_rows):
+                    _check_stop(stop_callback)
+                    rows = min(batch_rows, height_px - y)
+                    rgb_batch, bit_batch = native_generator.generate(
+                        y,
+                        rows,
+                        include_rgb=settings.write_interlaced_tiff,
+                    )
+                    if rgb_writer is not None:
+                        rgb_writer.write_rows(rgb_batch, rows)
+                    bit_writer.write_packed_rows(bit_batch, rows)
+                    now = time.perf_counter()
+                    if y == 0 or y + rows >= height_px or now - last_progress_time >= 0.5:
+                        last_progress_time = now
+                        _emit_progress(
+                            progress_callback,
+                            stage,
+                            y + rows,
+                            height_px,
+                            f"{y + rows}/{height_px} | Native AM",
+                        )
+            native_used = True
+        if not native_used:
+            with ExitStack() as stack:
+                rgb_writer = None
+                if settings.write_interlaced_tiff:
+                    rgb_writer = stack.enter_context(
+                        RgbTiffWriter(_tmp_path(paths.interlaced_tiff), width_px, height_px, settings.ppi)
+                    )
+                bit_writer = stack.enter_context(
+                    OneBitTiffWriter(_tmp_path(paths.film_1bit_tiff), width_px, height_px, settings.ppi)
+                )
+                progress_step = max(1, height_px // 1000)
+                last_progress_time = 0.0
+                for y in range(height_px):
+                    _check_stop(stop_callback)
+                    row = renderer.generate_final_row(y)
+                    if rgb_writer is not None:
+                        rgb_writer.write_row(row)
+                    bit_writer.write_black_row(halftoner.process_rgb_row(y, row))
+                    now = time.perf_counter()
+                    if y % progress_step == 0 or y == height_px - 1 or now - last_progress_time >= 0.5:
+                        last_progress_time = now
+                        _emit_progress(
+                            progress_callback,
+                        "生成交织 TIFF 和 1-bit TIFF",
+                            y + 1,
+                            height_px,
+                            f"{y + 1}/{height_px}",
+                        )
 
         preview_width, preview_height = preview_dimensions(width_px, height_px, settings.preview_max_edge)
         _emit_progress(progress_callback, "生成 PNG 预览", 0, preview_height)
@@ -1061,7 +1356,10 @@ def generate_delivery_outputs(
                 _check_stop(stop_callback)
                 if y % progress_step == 0 or y == preview_height - 1:
                     _emit_progress(progress_callback, "生成 PNG 预览", y + 1, preview_height)
-                yield renderer.generate_preview_row(y, preview_width, preview_height)
+                if native_generator is not None:
+                    yield native_generator.generate_preview_row(y, preview_width, preview_height)
+                else:
+                    yield renderer.generate_preview_row(y, preview_width, preview_height)
 
         write_rgb_png(_tmp_path(paths.preview_png), preview_width, preview_height, preview_rows())
 
@@ -1080,7 +1378,8 @@ def generate_delivery_outputs(
         with open(_tmp_path(paths.manifest_json), "w", encoding="utf-8") as f:
             json.dump(manifest, f, ensure_ascii=False, indent=2)
 
-        os.replace(_tmp_path(paths.interlaced_tiff), paths.interlaced_tiff)
+        if settings.write_interlaced_tiff:
+            os.replace(_tmp_path(paths.interlaced_tiff), paths.interlaced_tiff)
         os.replace(_tmp_path(paths.film_1bit_tiff), paths.film_1bit_tiff)
         os.replace(_tmp_path(paths.preview_png), paths.preview_png)
         os.replace(_tmp_path(paths.manifest_json), paths.manifest_json)
@@ -1106,6 +1405,7 @@ def build_manifest(settings: DeliverySettings, result: DeliveryResult, source_pa
             "height_px": result.height_px,
             "preview_width_px": result.preview_width,
             "preview_height_px": result.preview_height,
+            "write_interlaced_tiff": settings.write_interlaced_tiff,
         },
         "source_views": {
             "camera_count": settings.camera_count,
@@ -1124,7 +1424,7 @@ def build_manifest(settings: DeliverySettings, result: DeliveryResult, source_pa
             "source_upscale": result.source_upscale_warning,
         },
         "files": {
-            "interlaced_tiff": os.path.basename(result.paths.interlaced_tiff),
+            "interlaced_tiff": os.path.basename(result.paths.interlaced_tiff) if settings.write_interlaced_tiff else None,
             "preview_png": os.path.basename(result.paths.preview_png),
             "film_1bit_tiff": os.path.basename(result.paths.film_1bit_tiff),
             "manifest_json": os.path.basename(result.paths.manifest_json),

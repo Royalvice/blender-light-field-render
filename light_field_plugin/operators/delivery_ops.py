@@ -88,6 +88,7 @@ def _build_delivery_settings(context) -> DeliverySettings:
         ),
         plugin_version=_plugin_version_string(),
         confirm_large_output=props.delivery_confirm_large_output,
+        write_interlaced_tiff=props.delivery_write_interlaced_tiff,
     )
 
 

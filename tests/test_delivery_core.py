@@ -170,6 +170,36 @@ class DeliveryCoreTests(unittest.TestCase):
             self.assertEqual(manifest["delivery"]["height_px"], 5)
             self.assertEqual(manifest["source_views"]["camera_count"], 3)
 
+    def test_generate_delivery_outputs_can_skip_interlaced_tiff(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source_paths = []
+            for idx, color in enumerate(((255, 255, 255), (0, 0, 0))):
+                path = os.path.join(tmp, f"camera_{idx:03d}.png")
+                row = bytes(color * 3)
+                self.delivery.write_rgb_png(path, 3, 2, [row, row])
+                source_paths.append(path)
+
+            settings = self.delivery.DeliverySettings(
+                width_mm=2.54,
+                height_mm=2.54,
+                ppi=100,
+                frame=1,
+                camera_count=2,
+                source_width=3,
+                source_height=2,
+                interlace=self.delivery.InterlaceSettings(pe=16.7240, angle_degrees=0.0, offset=0.0),
+                halftone=self.delivery.HalftoneSettings(method="FM", lpi=100, gamma=1.0),
+                write_interlaced_tiff=False,
+            )
+
+            result = self.delivery.generate_delivery_outputs(source_paths, tmp, settings)
+            self.assertFalse(os.path.exists(result.paths.interlaced_tiff))
+            self.assertTrue(os.path.exists(result.paths.preview_png))
+            self.assertTrue(os.path.exists(result.paths.film_1bit_tiff))
+            manifest = json.loads(Path(result.paths.manifest_json).read_text(encoding="utf-8"))
+            self.assertFalse(manifest["delivery"]["write_interlaced_tiff"])
+            self.assertIsNone(manifest["files"]["interlaced_tiff"])
+
     def test_large_output_requires_confirmation(self):
         source = []
         with tempfile.TemporaryDirectory() as tmp:

@@ -355,6 +355,12 @@ class LightFieldProperties(PropertyGroup):
         default=False,
     )
 
+    delivery_write_interlaced_tiff: BoolProperty(
+        name="输出连续调交织 TIFF",
+        description="同时写出完整 RGB interlaced.tif；大图会额外写入数 GB 数据，关闭后只输出菲林 TIFF、预览和 manifest",
+        default=False,
+    )
+
     interlace_pe: FloatProperty(
         name="PE",
         description="交织公式原始 PE 参数，沿用现有 interlace_taichi.py 口径",

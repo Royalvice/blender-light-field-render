@@ -8,7 +8,15 @@ Use this checklist when publishing a GitHub Release.
 2. Run Python syntax checks:
 
    ```powershell
-   python -m py_compile light_field_plugin\__init__.py light_field_plugin\core\*.py light_field_plugin\operators\*.py light_field_plugin\panels\*.py light_field_plugin\properties\*.py
+   @'
+   from pathlib import Path
+   import py_compile
+   files = [Path("light_field_plugin/__init__.py")]
+   for folder in ("core", "operators", "panels", "properties"):
+       files.extend(Path("light_field_plugin", folder).glob("*.py"))
+   for path in files:
+       py_compile.compile(str(path), doraise=True)
+   '@ | python -
    ```
 
 3. Run unit tests:
@@ -32,34 +40,34 @@ Use this checklist when publishing a GitHub Release.
 6. Install the generated ZIP in Blender.
 7. Confirm the add-on enables successfully.
 8. Create a small camera array and render PNG, continuous TIFF, and 1-bit Film TIFF outputs.
-9. Generate current-frame final delivery output and verify `interlaced.tif`, `interlaced_preview.png`, `film_1bit.tif`, and `delivery_manifest.json`.
+9. Generate current-frame final delivery output and verify `interlaced_preview.png`, `film_1bit.tif`, and `delivery_manifest.json`. If `输出连续调 interlaced.tif` is enabled, also verify `interlaced.tif`.
 
 ## GitHub Release
 
 Recommended tag format:
 
 ```text
-v0.1.10
+v0.1.11
 ```
 
 Recommended title:
 
 ```text
-Light Field Render v0.1.10
+Light Field Render v0.1.11
 ```
 
 Release asset:
 
 ```text
-dist/light_field_render-v0.1.10.zip
+dist/light_field_render-v0.1.11.zip
 ```
 
 Suggested release notes:
 
 ```markdown
-## Light Field Render v0.1.10
+## Light Field Render v0.1.11
 
-Large-delivery performance and stress-test release.
+Native large-delivery acceleration and fast film-output release.
 
 ### Features
 
@@ -75,18 +83,21 @@ Large-delivery performance and stress-test release.
 - Refreshes focal-plane and depth-box helper visuals when output resolution settings are applied.
 - Localizes the Blender sidebar panels, property labels, operators, and status messages to Chinese.
 - Adds `最终交付输出` for current-frame delivery from physical size in mm plus PPI.
-- Generates full-size continuous interlaced TIFF, 2048px preview PNG, single-channel 1-bit film TIFF, and JSON manifest.
+- Generates 2048px preview PNG, single-channel 1-bit film TIFF, and JSON manifest by default.
+- Adds optional `输出连续调 interlaced.tif` output for workflows that need the full continuous-tone RGB interlaced TIFF.
 - Keeps Blender source-view resolution separate from final delivery pixel size to avoid rendering every camera at print resolution.
 - Reuses or renders current-frame source PNG views before interlacing.
 - Adds large-output confirmation, source-upscale warning, progress/status reporting, and error-log output.
 - Automatically writes BigTIFF when continuous interlaced RGB output exceeds classic TIFF 32-bit limits.
-- Adds optional NumPy acceleration for row interlacing and AM halftone generation.
+- Adds native Windows acceleration for same-dimension, zero-degree AM delivery generation.
+- Adds optional NumPy acceleration and bundles it in release ZIPs by default.
 - Speeds up RGB/filter-0 PNG source loading and same-dimension source-view row sampling.
-- Bundles Blender-compatible NumPy in release ZIPs by default for no-install user setup.
+- Bundles Blender-compatible NumPy and the Windows native accelerator in release ZIPs by default for no-install user setup.
 - Adds Blender status-bar progress updates for rendering and delivery generation.
-- Stress-tested `194 x 345 mm @ 4000 PPI` with 150 source views at `2160 x 3651`: full BigTIFF interlace, AM 1-bit TIFF, and preview finished in about 292 seconds with about 3.95 GB peak private memory on the test workstation.
+- Stress-tested `194 x 345 mm @ 4000 PPI` with 150 source views at `2160 x 3651`: fast film mode generated `film_1bit.tif`, preview, and manifest in about 10.2 seconds on the test workstation.
+- With optional continuous-tone `interlaced.tif` enabled, the same stress test generated the 4.98 GB BigTIFF plus 1-bit TIFF and preview in about 32.2 seconds; the remaining cost is dominated by writing the 4.98 GB RGB TIFF.
 
 ### Installation
 
-Download `light_field_render-v0.1.10.zip`, then install it from Blender via `Edit > Preferences > Add-ons > Install...`.
+Download `light_field_render-v0.1.11.zip`, then install it from Blender via `Edit > Preferences > Add-ons > Install...`.
 ```

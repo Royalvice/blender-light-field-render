@@ -244,7 +244,12 @@ class LIGHTFIELD_PT_delivery_output(Panel):
         layout.separator()
         col = layout.column(align=True)
         col.label(text="输出文件", icon="FILE_TICK")
-        col.label(text="interlaced.tif / interlaced_preview.png")
+        col.prop(props, "delivery_write_interlaced_tiff", text="输出连续调 interlaced.tif")
+        if props.delivery_write_interlaced_tiff:
+            col.label(text="interlaced.tif / interlaced_preview.png")
+        else:
+            col.label(text="快速模式：跳过 interlaced.tif")
+            col.label(text="输出 interlaced_preview.png 用于检查")
         col.label(text="film_1bit.tif / delivery_manifest.json")
 
         layout.separator()

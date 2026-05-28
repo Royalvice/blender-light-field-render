@@ -189,6 +189,7 @@ def main():
     props.interlace_offset = 0.0
     props.interlace_reverse_views = False
     props.film_halftone_method = "FM"
+    props.delivery_write_interlaced_tiff = False
 
     result = bpy.ops.lightfield.generate_delivery()
     assert result == {"FINISHED"}, result
@@ -197,19 +198,29 @@ def main():
     preview = delivery_dir / "interlaced_preview.png"
     film = delivery_dir / "film_1bit.tif"
     manifest_path = delivery_dir / "delivery_manifest.json"
-    assert interlaced.exists(), f"Missing {interlaced}"
+    assert not interlaced.exists(), f"Fast delivery should skip {interlaced}"
     assert preview.exists(), f"Missing {preview}"
     assert film.exists(), f"Missing {film}"
     assert manifest_path.exists(), f"Missing {manifest_path}"
-    assert_rgb_tiff(interlaced, 20, 10)
     assert_blender_image_size(preview, 20, 10)
     assert_1bit_tiff(film, 20, 10)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["delivery"]["width_px"] == 20, manifest["delivery"]
     assert manifest["delivery"]["height_px"] == 10, manifest["delivery"]
     assert manifest["delivery"]["ppi"] == 100, manifest["delivery"]
+    assert manifest["delivery"]["write_interlaced_tiff"] is False, manifest["delivery"]
     assert manifest["source_views"]["camera_count"] == 3, manifest["source_views"]
+    assert manifest["files"]["interlaced_tiff"] is None, manifest["files"]
     assert manifest["files"]["film_1bit_tiff"] == "film_1bit.tif", manifest["files"]
+
+    props.delivery_write_interlaced_tiff = True
+    result = bpy.ops.lightfield.generate_delivery()
+    assert result == {"FINISHED"}, result
+    assert interlaced.exists(), f"Missing {interlaced}"
+    assert_rgb_tiff(interlaced, 20, 10)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["delivery"]["write_interlaced_tiff"] is True, manifest["delivery"]
+    assert manifest["files"]["interlaced_tiff"] == "interlaced.tif", manifest["files"]
 
     props.delivery_width_mm = 1000
     props.delivery_height_mm = 1000
