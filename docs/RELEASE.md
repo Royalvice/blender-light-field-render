@@ -39,27 +39,27 @@ Use this checklist when publishing a GitHub Release.
 Recommended tag format:
 
 ```text
-v0.1.9
+v0.1.10
 ```
 
 Recommended title:
 
 ```text
-Light Field Render v0.1.9
+Light Field Render v0.1.10
 ```
 
 Release asset:
 
 ```text
-dist/light_field_render-v0.1.9.zip
+dist/light_field_render-v0.1.10.zip
 ```
 
 Suggested release notes:
 
 ```markdown
-## Light Field Render v0.1.9
+## Light Field Render v0.1.10
 
-BigTIFF, bundled NumPy, and large-delivery progress release.
+Large-delivery performance and stress-test release.
 
 ### Features
 
@@ -81,10 +81,12 @@ BigTIFF, bundled NumPy, and large-delivery progress release.
 - Adds large-output confirmation, source-upscale warning, progress/status reporting, and error-log output.
 - Automatically writes BigTIFF when continuous interlaced RGB output exceeds classic TIFF 32-bit limits.
 - Adds optional NumPy acceleration for row interlacing and AM halftone generation.
+- Speeds up RGB/filter-0 PNG source loading and same-dimension source-view row sampling.
 - Bundles Blender-compatible NumPy in release ZIPs by default for no-install user setup.
 - Adds Blender status-bar progress updates for rendering and delivery generation.
+- Stress-tested `194 x 345 mm @ 4000 PPI` with 150 source views at `2160 x 3651`: full BigTIFF interlace, AM 1-bit TIFF, and preview finished in about 292 seconds with about 3.95 GB peak private memory on the test workstation.
 
 ### Installation
 
-Download `light_field_render-v0.1.9.zip`, then install it from Blender via `Edit > Preferences > Add-ons > Install...`.
+Download `light_field_render-v0.1.10.zip`, then install it from Blender via `Edit > Preferences > Add-ons > Install...`.
 ```

@@ -143,7 +143,7 @@ class DeliveryCoreTests(unittest.TestCase):
                 source_height=3,
                 interlace=self.delivery.InterlaceSettings(pe=16.7240, angle_degrees=0.0, offset=0.0),
                 halftone=self.delivery.HalftoneSettings(method="FM", lpi=100, gamma=1.0),
-                plugin_version="0.1.9",
+                plugin_version="0.1.10",
             )
 
             result = self.delivery.generate_delivery_outputs(source_paths, tmp, settings)
@@ -165,7 +165,7 @@ class DeliveryCoreTests(unittest.TestCase):
             self.assertEqual(bit_tags[258][2] & 0xFFFF, 1)
 
             manifest = json.loads(Path(result.paths.manifest_json).read_text(encoding="utf-8"))
-            self.assertEqual(manifest["plugin_version"], "0.1.9")
+            self.assertEqual(manifest["plugin_version"], "0.1.10")
             self.assertEqual(manifest["delivery"]["width_px"], 10)
             self.assertEqual(manifest["delivery"]["height_px"], 5)
             self.assertEqual(manifest["source_views"]["camera_count"], 3)

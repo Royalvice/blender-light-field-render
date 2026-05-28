@@ -310,26 +310,28 @@ def read_png_rgb(path: str) -> PngImage:
         row = bytearray(raw[offset:offset + scanline_len])
         offset += scanline_len
 
-        for i in range(scanline_len):
-            left = row[i - bpp] if i >= bpp else 0
-            up = previous[i]
-            upper_left = previous[i - bpp] if i >= bpp else 0
-            if filter_type == 0:
-                recon = row[i]
-            elif filter_type == 1:
-                recon = (row[i] + left) & 0xFF
-            elif filter_type == 2:
-                recon = (row[i] + up) & 0xFF
-            elif filter_type == 3:
-                recon = (row[i] + ((left + up) // 2)) & 0xFF
-            elif filter_type == 4:
-                recon = (row[i] + _paeth_predictor(left, up, upper_left)) & 0xFF
-            else:
-                raise DeliveryError(f"Unsupported PNG filter {filter_type}: {path}")
-            row[i] = recon
+        if filter_type != 0:
+            for i in range(scanline_len):
+                left = row[i - bpp] if i >= bpp else 0
+                up = previous[i]
+                upper_left = previous[i - bpp] if i >= bpp else 0
+                if filter_type == 1:
+                    recon = (row[i] + left) & 0xFF
+                elif filter_type == 2:
+                    recon = (row[i] + up) & 0xFF
+                elif filter_type == 3:
+                    recon = (row[i] + ((left + up) // 2)) & 0xFF
+                elif filter_type == 4:
+                    recon = (row[i] + _paeth_predictor(left, up, upper_left)) & 0xFF
+                else:
+                    raise DeliveryError(f"Unsupported PNG filter {filter_type}: {path}")
+                row[i] = recon
 
         rows.append(bytes(row))
         previous = row
+
+    if color_type == 2:
+        return PngImage(width, height, b"".join(rows))
 
     rgb = bytearray(width * height * 3)
     target = 0
@@ -798,10 +800,16 @@ class InterlaceRenderer:
         self._view_order_np = None
         self._x_final_np = None
         self._source_x_cache = {}
+        self._same_source_dimensions = False
         if self._use_numpy:
             self._np_sources = [NumpyPngSource(source) for source in self.sources]
             self._view_order_np = _np.array(self.view_order, dtype=_np.int16)
             self._x_final_np = _np.arange(self.width_px, dtype=_np.float64)
+            first = self._np_sources[0]
+            self._same_source_dimensions = all(
+                source.width == first.width and source.height == first.height
+                for source in self._np_sources
+            )
 
     def _sample_channel(self, final_x: int, final_y: int, channel: int) -> int:
         view = interlace_view_index(
@@ -872,6 +880,8 @@ class InterlaceRenderer:
         return self._view_order_np[_np.mod(view, self.settings.camera_count)]
 
     def _generate_final_row_numpy(self, y: int) -> bytes:
+        if self._same_source_dimensions:
+            return self._generate_final_row_numpy_common_sources(y)
         row = _np.empty((self.width_px, 3), dtype=_np.uint8)
         for channel in range(3):
             source_indices = self._view_indices_numpy(y, channel)
@@ -895,6 +905,27 @@ class InterlaceRenderer:
                 )
                 values = _np.rint(top * (1.0 - ty) + bottom * ty).clip(0, 255).astype(_np.uint8)
                 output_channel[idx] = values
+        return row.tobytes()
+
+    def _generate_final_row_numpy_common_sources(self, y: int) -> bytes:
+        source = self._np_sources[0]
+        x0, x1, tx = self._source_x_arrays(source)
+        y0, y1, ty = self._source_y_values(source, y)
+        row = _np.empty((self.width_px, 3), dtype=_np.uint8)
+
+        for channel in range(3):
+            source_indices = self._view_indices_numpy(y, channel).astype(_np.int64, copy=False)
+            top_rows = _np.stack([src.array[y0, :, channel] for src in self._np_sources], axis=0)
+            bottom_rows = _np.stack([src.array[y1, :, channel] for src in self._np_sources], axis=0)
+            top = (
+                top_rows[source_indices, x0].astype(_np.float32) * (1.0 - tx)
+                + top_rows[source_indices, x1].astype(_np.float32) * tx
+            )
+            bottom = (
+                bottom_rows[source_indices, x0].astype(_np.float32) * (1.0 - tx)
+                + bottom_rows[source_indices, x1].astype(_np.float32) * tx
+            )
+            row[:, channel] = _np.rint(top * (1.0 - ty) + bottom * ty).clip(0, 255).astype(_np.uint8)
         return row.tobytes()
 
     def generate_preview_row(self, preview_y: int, preview_width: int, preview_height: int) -> bytes:

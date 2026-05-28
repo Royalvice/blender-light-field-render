@@ -29,7 +29,7 @@ The repository is now organized around the Blender add-on. The older Three.js vi
 Use the release ZIP asset named like:
 
 ```text
-light_field_render-v0.1.9.zip
+light_field_render-v0.1.10.zip
 ```
 
 Then install it in Blender:
@@ -90,6 +90,8 @@ output_path/
 This avoids forcing Blender to render every camera at the final print resolution.
 
 For very large delivery sizes, the add-on switches `interlaced.tif` to BigTIFF automatically. For example, `194 x 345 mm @ 4000 PPI` is about `30551 x 54331` pixels, so the RGB continuous TIFF is roughly 5 GB and cannot be represented by classic TIFF.
+
+The large-delivery path has been stress-tested with 150 source views at `2160 x 3651`, `194 x 345 mm @ 4000 PPI`, `PE=52.64`, and AM `200 LPI / 45°`. On the test workstation, complete interlace, 1-bit halftone, BigTIFF writing, and preview generation took about 292 seconds with about 3.95 GB peak private memory.
 
 ## Build Release ZIP
 
