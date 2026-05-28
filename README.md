@@ -29,7 +29,7 @@ The repository is now organized around the Blender add-on. The older Three.js vi
 Use the release ZIP asset named like:
 
 ```text
-light_field_render-v0.1.12.zip
+light_field_render-v0.1.13.zip
 ```
 
 Then install it in Blender:

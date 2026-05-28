@@ -224,7 +224,7 @@ class LightFieldProperties(PropertyGroup):
             ("FM", "FM / 误差扩散", "固定大小网点按密度分布，通常更适合光栅/光场流程"),
             ("AM", "AM / 聚集网点", "传统调幅挂网，由 LPI、网角和网点形状控制"),
         ],
-        default="FM",
+        default="AM",
         update=mark_render_settings_dirty,
     )
 

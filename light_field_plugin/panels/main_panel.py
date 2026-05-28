@@ -196,7 +196,11 @@ class LIGHTFIELD_PT_film_tiff(Panel):
 
         box = layout.box()
         box.label(text="菲林 TIFF 为 1-bit 纯黑白输出。", icon="INFO")
-        box.label(text="默认推荐 FM，通常更不容易出现龟纹。")
+        box.label(text="大图快速交付推荐 AM，可走 Native 加速。")
+        if props.film_halftone_method == "FM":
+            warn = layout.box()
+            warn.label(text="FM 大图不会走 Native 快速路径。", icon="ERROR")
+            warn.label(text="4000 PPI 可能需要很久；15 秒目标请用 AM。")
 
 
 class LIGHTFIELD_PT_delivery_output(Panel):
@@ -240,6 +244,11 @@ class LIGHTFIELD_PT_delivery_output(Panel):
         col.prop(props, "interlace_angle", text="Angle (°)")
         col.prop(props, "interlace_offset", text="Offset")
         col.prop(props, "interlace_reverse_views", text="反转视角顺序")
+        if props.film_halftone_method == "AM" and abs(props.interlace_angle) < 1.0e-6:
+            col.label(text="当前可使用 Native AM 快速路径", icon="CHECKMARK")
+        else:
+            col.label(text="当前不会使用 Native 快速路径", icon="ERROR")
+            col.label(text="快速路径要求：AM 挂网 + Angle=0°")
 
         layout.separator()
         col = layout.column(align=True)

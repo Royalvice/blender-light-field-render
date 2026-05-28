@@ -8,9 +8,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class PluginStaticTests(unittest.TestCase):
-    def test_version_is_0_1_12(self):
+    def test_version_is_0_1_13(self):
         init_text = (REPO_ROOT / "light_field_plugin" / "__init__.py").read_text(encoding="utf-8")
-        self.assertIn('"version": (0, 1, 12)', init_text)
+        self.assertIn('"version": (0, 1, 13)', init_text)
 
     def test_panel_labels_are_localized_in_chinese(self):
         text = (REPO_ROOT / "light_field_plugin" / "panels" / "main_panel.py").read_text(encoding="utf-8")
@@ -101,6 +101,11 @@ class PluginStaticTests(unittest.TestCase):
         text = (REPO_ROOT / "light_field_plugin" / "operators" / "create_ops.py").read_text(encoding="utf-8")
         self.assertIn("def apply_output_settings", text)
         self.assertIn("control.update_visuals()", text)
+
+    def test_delivery_does_not_force_rerender_for_halftone_changes(self):
+        text = (REPO_ROOT / "light_field_plugin" / "operators" / "delivery_ops.py").read_text(encoding="utf-8")
+        self.assertIn("force_rerender = self.props.geometry_dirty or not get_light_field_control().is_created", text)
+        self.assertNotIn("force_rerender = self.props.geometry_dirty or self.props.render_settings_dirty", text)
 
 
 if __name__ == "__main__":

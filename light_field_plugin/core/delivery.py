@@ -1341,10 +1341,10 @@ def generate_delivery_outputs(
                         last_progress_time = now
                         _emit_progress(
                             progress_callback,
-                        "生成交织 TIFF 和 1-bit TIFF",
+                            "生成交织 TIFF 和 1-bit TIFF",
                             y + 1,
                             height_px,
-                            f"{y + 1}/{height_px}",
+                            f"{y + 1}/{height_px} | Python {(settings.halftone.method or 'FM').upper()}",
                         )
 
         preview_width, preview_height = preview_dimensions(width_px, height_px, settings.preview_max_edge)

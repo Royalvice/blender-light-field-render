@@ -119,8 +119,8 @@ For `1-bit 菲林 TIFF`, the output is a single-channel 1-bit TIFF intended for 
 
 Halftone controls:
 
-- `FM / 误差扩散`: dispersed fixed-size dots. This is the default because it is generally less prone to visible moire in lenticular/light-field workflows.
-- `AM / 聚集网点`: traditional clustered dots controlled by `DPI`, `LPI`, screen angle, and dot shape.
+- `AM / 聚集网点`: traditional clustered dots controlled by `DPI`, `LPI`, screen angle, and dot shape. This is the default for final delivery because large zero-degree interlace jobs can use the bundled native accelerator.
+- `FM / 误差扩散`: dispersed fixed-size dots. It can reduce visible moire in some lenticular/light-field workflows, but very large delivery jobs do not use the native fast path and can take much longer.
 - `DPI`: output resolution metadata and AM cell-size basis.
 - `LPI`: AM screen ruling, used only in AM mode.
 - `网角`: AM screen angle in degrees.
