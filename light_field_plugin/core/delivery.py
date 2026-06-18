@@ -26,6 +26,12 @@ LARGE_OUTPUT_PIXELS = 100_000_000
 SOURCE_UPSCALE_WARNING_FACTOR = 2.0
 PREVIEW_MAX_EDGE = 2048
 UINT32_MAX = 0xFFFFFFFF
+LBY_LIKE_THRESHOLD = 178
+LBY_LIKE_BLACK_IS_ZERO = True
+LBY_LIKE_FIT_NOTE = (
+    "whole-pixel PE interlace, reversed view order recommended by vendor pair, "
+    "single-threshold 1-bit output fitted from the 150 JPG -> TIFF sample"
+)
 
 
 _VENDOR_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "_vendor")
@@ -76,6 +82,26 @@ def _load_native_dll():
             ctypes.c_int,
         ]
         dll.lf_generate_am_batch.restype = ctypes.c_int
+        dll.lf_generate_lby_batch.argtypes = [
+            ctypes.POINTER(ctypes.c_uint8),
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.POINTER(ctypes.c_int16),
+            ctypes.POINTER(ctypes.c_int32),
+            ctypes.POINTER(ctypes.c_int32),
+            ctypes.POINTER(ctypes.c_float),
+            ctypes.c_double,
+            ctypes.c_int,
+            ctypes.POINTER(ctypes.c_uint8),
+            ctypes.POINTER(ctypes.c_uint8),
+            ctypes.c_int,
+        ]
+        dll.lf_generate_lby_batch.restype = ctypes.c_int
         _NATIVE_DLL = dll
     except Exception:
         _NATIVE_DLL = None
@@ -124,6 +150,7 @@ class DeliverySettings:
     confirm_large_output: bool = False
     write_interlaced_tiff: bool = True
     write_film_tiff: bool = True
+    source_format: str = "JPG"
 
 
 @dataclass
@@ -202,14 +229,18 @@ def interlace_view_index(
     pe: float,
     angle_radians: float,
     offset: float,
+    ppi: float = 0.0,
 ) -> int:
     if num_views <= 0:
         raise ValueError("num_views must be greater than 0")
     if pe <= 0:
         raise ValueError("PE must be greater than 0")
-    d_value = 3.0 * x + 3.0 * y * math.tan(angle_radians) + channel + offset
-    a_value = d_value % pe
-    view = int(math.floor(a_value / (pe / num_views))) % num_views
+    period_px = float(ppi) / float(pe) if ppi and ppi > 1.0 else float(pe)
+    if period_px <= 0:
+        raise ValueError("Interlace period must be greater than 0")
+    d_value = float(x) + float(y) * math.tan(angle_radians) + float(offset)
+    a_value = d_value % period_px
+    view = int(math.floor(a_value / (period_px / num_views))) % num_views
     return view
 
 
@@ -303,6 +334,37 @@ def read_png_info(path: str) -> Tuple[int, int, int, int]:
                 return width, height, bit_depth, color_type
             if chunk_type == b"IEND":
                 raise DeliveryError(f"PNG missing IHDR: {path}")
+
+
+def read_jpeg_info(path: str) -> Tuple[int, int]:
+    with open(path, "rb") as f:
+        data = f.read()
+    if len(data) < 4 or data[:2] != b"\xFF\xD8":
+        raise DeliveryError(f"Not a JPEG file: {path}")
+    cursor = 2
+    sof_markers = {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
+    while cursor + 4 <= len(data):
+        while cursor < len(data) and data[cursor] == 0xFF:
+            cursor += 1
+        if cursor >= len(data):
+            break
+        marker = data[cursor]
+        cursor += 1
+        if marker in {0xD8, 0xD9} or 0xD0 <= marker <= 0xD7:
+            continue
+        if cursor + 2 > len(data):
+            break
+        length = struct.unpack(">H", data[cursor:cursor + 2])[0]
+        if length < 2 or cursor + length > len(data):
+            break
+        if marker in sof_markers:
+            if length < 7:
+                raise DeliveryError(f"Invalid JPEG SOF segment: {path}")
+            height = struct.unpack(">H", data[cursor + 3:cursor + 5])[0]
+            width = struct.unpack(">H", data[cursor + 5:cursor + 7])[0]
+            return width, height
+        cursor += length
+    raise DeliveryError(f"JPEG missing SOF segment: {path}")
 
 
 def read_png_rgb(path: str) -> PngImage:
@@ -612,7 +674,7 @@ class OneBitTiffWriter:
             _ifd_entry(257, 4, 1, self.height),
             _ifd_entry(258, 3, 1, _short_value(1)),
             _ifd_entry(259, 3, 1, _short_value(1)),
-            _ifd_entry(262, 3, 1, _short_value(0)),
+            _ifd_entry(262, 3, 1, _short_value(1)),
             _ifd_entry(273, 4, 1, image_offset),
             _ifd_entry(277, 3, 1, _short_value(1)),
             _ifd_entry(278, 4, 1, self.height),
@@ -653,7 +715,7 @@ class OneBitTiffWriter:
             _bigtiff_ifd_entry(257, 4, 1, self.height),
             _bigtiff_ifd_entry(258, 3, 1, _short_value(1)),
             _bigtiff_ifd_entry(259, 3, 1, _short_value(1)),
-            _bigtiff_ifd_entry(262, 3, 1, _short_value(0)),
+            _bigtiff_ifd_entry(262, 3, 1, _short_value(1)),
             _bigtiff_ifd_entry(273, 16, 1, image_offset),
             _bigtiff_ifd_entry(277, 3, 1, _short_value(1)),
             _bigtiff_ifd_entry(278, 4, 1, self.height),
@@ -685,7 +747,8 @@ class OneBitTiffWriter:
         if len(black_row) != self.width:
             raise ValueError("1-bit TIFF row length does not match image width")
         if _np is not None and hasattr(black_row, "dtype"):
-            packed = _np.packbits(black_row.astype(_np.uint8), bitorder="big").tobytes()
+            black_bits = black_row.astype(_np.uint8)
+            packed = _np.packbits(1 - black_bits, bitorder="big").tobytes()
             self._file.write(packed)
             self._rows_written += 1
             return
@@ -693,7 +756,7 @@ class OneBitTiffWriter:
         byte = 0
         bit_count = 0
         for is_black in black_row:
-            byte = (byte << 1) | (1 if is_black else 0)
+            byte = (byte << 1) | (0 if is_black else 1)
             bit_count += 1
             if bit_count == 8:
                 packed.append(byte)
@@ -757,6 +820,10 @@ class StreamingHalftoner:
     def process_rgb_row(self, y: int, row: bytes) -> List[bool]:
         if len(row) != self.width * 3:
             raise ValueError("Halftone row length does not match image width")
+        if self._method == "LBY":
+            if _np is not None:
+                return self._process_lby_row_numpy(row)
+            return self._process_lby_row(row)
         if self._method == "AM":
             if _np is not None:
                 return self._process_am_row_numpy(y, row)
@@ -794,6 +861,22 @@ class StreamingHalftoner:
 
         self._next_errors = next_errors
         return black
+
+    def _process_lby_row(self, row: bytes) -> List[bool]:
+        black = [False for _ in range(self.width)]
+        for x in range(self.width):
+            offset = x * 3
+            r = row[offset]
+            g = row[offset + 1]
+            b = row[offset + 2]
+            luma = 0.2126 * r + 0.7152 * g + 0.0722 * b
+            black[x] = luma <= float(LBY_LIKE_THRESHOLD)
+        return black
+
+    def _process_lby_row_numpy(self, row: bytes):
+        rgb = _np.frombuffer(row, dtype=_np.uint8).reshape(self.width, 3).astype(_np.float32)
+        luma = 0.2126 * rgb[:, 0] + 0.7152 * rgb[:, 1] + 0.0722 * rgb[:, 2]
+        return luma <= float(LBY_LIKE_THRESHOLD)
 
     def _process_am_row(self, y: int, row: bytes) -> List[bool]:
         shape = (self.settings.dot_shape or "ROUND").upper()
@@ -902,6 +985,7 @@ class InterlaceRenderer:
             self.settings.interlace.pe,
             self.angle_radians,
             self.settings.interlace.offset,
+            self.settings.ppi,
         )
         source = self.sources[self.view_order[view]]
         if self.width_px <= 1:
@@ -920,8 +1004,29 @@ class InterlaceRenderer:
         row = bytearray(self.width_px * 3)
         for x in range(self.width_px):
             target = x * 3
-            for channel in range(3):
-                row[target + channel] = self._sample_channel(x, y, channel)
+            view = interlace_view_index(
+                x,
+                y,
+                0,
+                self.settings.camera_count,
+                self.settings.interlace.pe,
+                self.angle_radians,
+                self.settings.interlace.offset,
+                self.settings.ppi,
+            )
+            source = self.sources[self.view_order[view]]
+            if self.width_px <= 1:
+                source_x = 0.0
+            else:
+                source_x = x * (source.width - 1) / float(self.width_px - 1)
+            if self.height_px <= 1:
+                source_y = 0.0
+            else:
+                source_y = y * (source.height - 1) / float(self.height_px - 1)
+            r, g, b = source.sample_bilinear(source_x, source_y)
+            row[target] = r
+            row[target + 1] = g
+            row[target + 2] = b
         return bytes(row)
 
     def _source_x_arrays(self, source: NumpyPngSource):
@@ -951,22 +1056,22 @@ class InterlaceRenderer:
         return y0, y1, ty
 
     def _view_indices_numpy(self, y: int, channel: int):
+        period_px = float(self.settings.ppi) / float(self.settings.interlace.pe)
         d_value = (
-            3.0 * self._x_final_np
-            + 3.0 * float(y) * math.tan(self.angle_radians)
-            + float(channel)
+            self._x_final_np
+            + float(y) * math.tan(self.angle_radians)
             + float(self.settings.interlace.offset)
         )
-        a_value = _np.mod(d_value, float(self.settings.interlace.pe))
-        view = _np.floor(a_value / (float(self.settings.interlace.pe) / self.settings.camera_count)).astype(_np.int16)
+        a_value = _np.mod(d_value, period_px)
+        view = _np.floor(a_value / (period_px / self.settings.camera_count)).astype(_np.int16)
         return self._view_order_np[_np.mod(view, self.settings.camera_count)]
 
     def _generate_final_row_numpy(self, y: int) -> bytes:
         if self._same_source_dimensions:
             return self._generate_final_row_numpy_common_sources(y)
         row = _np.empty((self.width_px, 3), dtype=_np.uint8)
+        source_indices = self._view_indices_numpy(y, 0)
         for channel in range(3):
-            source_indices = self._view_indices_numpy(y, channel)
             output_channel = row[:, channel]
             for source_index in _np.unique(source_indices):
                 mask = source_indices == source_index
@@ -995,8 +1100,8 @@ class InterlaceRenderer:
         y0, y1, ty = self._source_y_values(source, y)
         row = _np.empty((self.width_px, 3), dtype=_np.uint8)
 
+        source_indices = self._view_indices_numpy(y, 0).astype(_np.int64, copy=False)
         for channel in range(3):
-            source_indices = self._view_indices_numpy(y, channel).astype(_np.int64, copy=False)
             top_rows = _np.stack([src.array[y0, :, channel] for src in self._np_sources], axis=0)
             bottom_rows = _np.stack([src.array[y1, :, channel] for src in self._np_sources], axis=0)
             top = (
@@ -1024,8 +1129,29 @@ class InterlaceRenderer:
                 final_x = round_half_up(px * (self.width_px - 1) / float(preview_width - 1))
             final_x = max(0, min(self.width_px - 1, final_x))
             target = px * 3
-            for channel in range(3):
-                row[target + channel] = self._sample_channel(final_x, final_y, channel)
+            view = interlace_view_index(
+                final_x,
+                final_y,
+                0,
+                self.settings.camera_count,
+                self.settings.interlace.pe,
+                self.angle_radians,
+                self.settings.interlace.offset,
+                self.settings.ppi,
+            )
+            source = self.sources[self.view_order[view]]
+            if self.width_px <= 1:
+                source_x = 0.0
+            else:
+                source_x = final_x * (source.width - 1) / float(self.width_px - 1)
+            if self.height_px <= 1:
+                source_y = 0.0
+            else:
+                source_y = final_y * (source.height - 1) / float(self.height_px - 1)
+            r, g, b = source.sample_bilinear(source_x, source_y)
+            row[target] = r
+            row[target + 1] = g
+            row[target + 2] = b
         return bytes(row)
 
 
@@ -1038,8 +1164,9 @@ class NativeAmBatchGenerator:
             raise DeliveryError("Native batch generation DLL is not available")
         if not renderer._same_source_dimensions:
             raise DeliveryError("Native batch generation requires equal source dimensions")
-        if settings.write_film_tiff and (settings.halftone.method or "FM").upper() != "AM":
-            raise DeliveryError("Native batch generation currently supports AM halftone only")
+        self.method = (settings.halftone.method or "FM").upper()
+        if settings.write_film_tiff and self.method not in {"AM", "LBY"}:
+            raise DeliveryError("Native batch generation currently supports AM and LBY halftone only")
 
         self.settings = settings
         self.width = renderer.width_px
@@ -1070,18 +1197,13 @@ class NativeAmBatchGenerator:
         self.tx = (source_x - self.x0).astype(_np.float32)
 
         view_map = _np.empty((3, self.width), dtype=_np.int16)
-        tan_angle = math.tan(renderer.angle_radians)
+        period_px = float(settings.ppi) / float(settings.interlace.pe)
+        d_value = x + float(settings.interlace.offset)
+        a_value = _np.mod(d_value, period_px)
+        view = _np.floor(a_value / (period_px / settings.camera_count)).astype(_np.int16)
+        whole_pixel_map = renderer._view_order_np[_np.mod(view, settings.camera_count)]
         for channel in range(3):
-            d_value = (
-                3.0 * x
-                + 3.0 * 0.0 * tan_angle
-                + float(channel)
-                + float(settings.interlace.offset)
-            )
-            # The native fast path is used only for angle 0, so y does not affect view selection.
-            a_value = _np.mod(d_value, float(settings.interlace.pe))
-            view = _np.floor(a_value / (float(settings.interlace.pe) / settings.camera_count)).astype(_np.int16)
-            view_map[channel] = renderer._view_order_np[_np.mod(view, settings.camera_count)]
+            view_map[channel] = whole_pixel_map
         self.view_map = _np.ascontiguousarray(view_map)
 
         angle = math.radians(settings.halftone.angle_degrees)
@@ -1097,7 +1219,7 @@ class NativeAmBatchGenerator:
             native_available()
             and renderer._same_source_dimensions
             and abs(float(settings.interlace.angle_degrees)) < 1.0e-9
-            and (not settings.write_film_tiff or (settings.halftone.method or "FM").upper() == "AM")
+            and (not settings.write_film_tiff or (settings.halftone.method or "FM").upper() in {"AM", "LBY"})
         )
 
     @staticmethod
@@ -1109,29 +1231,50 @@ class NativeAmBatchGenerator:
     def generate(self, y_start: int, rows: int, include_rgb: bool = True, include_bits: bool = True):
         rgb = _np.empty((rows, self.width, 3), dtype=_np.uint8) if include_rgb else None
         bits = _np.empty((rows, self.row_bytes), dtype=_np.uint8) if include_bits else None
-        result = self.dll.lf_generate_am_batch(
-            self._ptr(self.source_stack, ctypes.c_uint8),
-            self.source_count,
-            self.source_width,
-            self.source_height,
-            self.width,
-            self.height,
-            int(y_start),
-            int(rows),
-            self._ptr(self.view_map, ctypes.c_int16),
-            self._ptr(self.x0, ctypes.c_int32),
-            self._ptr(self.x1, ctypes.c_int32),
-            self._ptr(self.tx, ctypes.c_float),
-            float(self.y_scale),
-            float(self.screen_cos),
-            float(self.screen_sin),
-            float(self.cell_size),
-            float(self.settings.halftone.gamma),
-            int(self.dot_shape),
-            self._ptr(rgb, ctypes.c_uint8),
-            self._ptr(bits, ctypes.c_uint8),
-            self.row_bytes,
-        )
+        if self.method == "LBY":
+            result = self.dll.lf_generate_lby_batch(
+                self._ptr(self.source_stack, ctypes.c_uint8),
+                self.source_count,
+                self.source_width,
+                self.source_height,
+                self.width,
+                self.height,
+                int(y_start),
+                int(rows),
+                self._ptr(self.view_map, ctypes.c_int16),
+                self._ptr(self.x0, ctypes.c_int32),
+                self._ptr(self.x1, ctypes.c_int32),
+                self._ptr(self.tx, ctypes.c_float),
+                float(self.y_scale),
+                int(LBY_LIKE_THRESHOLD),
+                self._ptr(rgb, ctypes.c_uint8),
+                self._ptr(bits, ctypes.c_uint8),
+                self.row_bytes,
+            )
+        else:
+            result = self.dll.lf_generate_am_batch(
+                self._ptr(self.source_stack, ctypes.c_uint8),
+                self.source_count,
+                self.source_width,
+                self.source_height,
+                self.width,
+                self.height,
+                int(y_start),
+                int(rows),
+                self._ptr(self.view_map, ctypes.c_int16),
+                self._ptr(self.x0, ctypes.c_int32),
+                self._ptr(self.x1, ctypes.c_int32),
+                self._ptr(self.tx, ctypes.c_float),
+                float(self.y_scale),
+                float(self.screen_cos),
+                float(self.screen_sin),
+                float(self.cell_size),
+                float(self.settings.halftone.gamma),
+                int(self.dot_shape),
+                self._ptr(rgb, ctypes.c_uint8),
+                self._ptr(bits, ctypes.c_uint8),
+                self.row_bytes,
+            )
         if result != 0:
             raise DeliveryError(f"Native batch generation failed with code {result}")
         return rgb, bits
@@ -1153,14 +1296,16 @@ class NativeAmBatchGenerator:
         x1 = _np.minimum(self.source_width - 1, x0 + 1)
         tx = (source_x - x0).astype(_np.float32)
 
+        period_px = float(self.settings.ppi) / float(self.settings.interlace.pe)
+        d_value = final_x + float(self.settings.interlace.offset)
+        a_value = _np.mod(d_value, period_px)
+        view = _np.floor(a_value / (period_px / self.settings.camera_count)).astype(_np.int64)
+        whole_pixel_map = _np.mod(view, self.settings.camera_count)
+        if self.settings.interlace.reverse_views:
+            whole_pixel_map = self.settings.camera_count - 1 - whole_pixel_map
         view_map = _np.empty((3, preview_width), dtype=_np.int64)
         for channel in range(3):
-            d_value = 3.0 * final_x + float(channel) + float(self.settings.interlace.offset)
-            a_value = _np.mod(d_value, float(self.settings.interlace.pe))
-            view = _np.floor(a_value / (float(self.settings.interlace.pe) / self.settings.camera_count)).astype(_np.int64)
-            if self.settings.interlace.reverse_views:
-                view = self.settings.camera_count - 1 - view
-            view_map[channel] = _np.mod(view, self.settings.camera_count)
+            view_map[channel] = whole_pixel_map
 
         cached = (x0, x1, tx, view_map)
         self._preview_cache[preview_width] = cached
@@ -1322,7 +1467,10 @@ def generate_delivery_outputs(
                     if rgb_writer is not None:
                         rgb_writer.write_rows(rgb_batch, rows)
                     if bit_writer is not None:
-                        bit_writer.write_packed_rows(bit_batch, rows)
+                        if native_generator.method == "AM":
+                            bit_writer.write_packed_rows(_np.bitwise_xor(bit_batch, 0xFF), rows)
+                        else:
+                            bit_writer.write_packed_rows(bit_batch, rows)
                     now = time.perf_counter()
                     if y == 0 or y + rows >= height_px or now - last_progress_time >= 0.5:
                         last_progress_time = now
@@ -1331,7 +1479,7 @@ def generate_delivery_outputs(
                             stage,
                             y + rows,
                             height_px,
-                            f"{y + rows}/{height_px} | Native AM",
+                            f"{y + rows}/{height_px} | Native {native_generator.method}",
                         )
             native_used = True
         if not native_used:
@@ -1413,6 +1561,25 @@ def generate_delivery_outputs(
 
 
 def build_manifest(settings: DeliverySettings, result: DeliveryResult, source_paths: Sequence[str]) -> dict:
+    if settings.source_format:
+        source_ext = "jpg" if settings.source_format.upper() in {"JPG", "JPEG"} else settings.source_format.lower()
+        source_files = [f"camera_{idx:03d}.{source_ext}" for idx in range(settings.camera_count)]
+    else:
+        source_files = [os.path.basename(path) for path in source_paths]
+    halftone = {
+        **asdict(settings.halftone),
+        "ppi_as_tiff_dpi": settings.ppi,
+    }
+    if (settings.halftone.method or "").upper() == "LBY":
+        halftone.update(
+            {
+                "algorithm": "LBY-like approximate threshold",
+                "threshold_luma_0_255": LBY_LIKE_THRESHOLD,
+                "photometric_interpretation": 1,
+                "black_is_zero": LBY_LIKE_BLACK_IS_ZERO,
+                "fit_note": LBY_LIKE_FIT_NOTE,
+            }
+        )
     return {
         "plugin_version": settings.plugin_version,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -1430,16 +1597,14 @@ def build_manifest(settings: DeliverySettings, result: DeliveryResult, source_pa
         },
         "source_views": {
             "camera_count": settings.camera_count,
+            "source_format": settings.source_format,
             "source_width_px": settings.source_width,
             "source_height_px": settings.source_height,
             "order": "reversed" if settings.interlace.reverse_views else "ascending",
-            "files": [os.path.basename(path) for path in source_paths],
+            "files": source_files,
         },
         "interlace": asdict(settings.interlace),
-        "halftone": {
-            **asdict(settings.halftone),
-            "ppi_as_tiff_dpi": settings.ppi,
-        },
+        "halftone": halftone,
         "warnings": {
             "large_output": result.large_output_warning,
             "source_upscale": result.source_upscale_warning,

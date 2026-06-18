@@ -94,7 +94,10 @@ class DeliveryCoreTests(unittest.TestCase):
                 writer.write_black_row([False, True])
             tags = read_tiff_tags(bit_tiff)
             self.assertEqual(tags[258][2] & 0xFFFF, 1)
+            self.assertEqual(tags[262][2] & 0xFFFF, 1)
             self.assertEqual(tags[277][2] & 0xFFFF, 1)
+            payload = Path(bit_tiff).read_bytes()[-2:]
+            self.assertEqual(payload, bytes([0x40, 0x80]))
 
     def test_bigtiff_writers_use_64bit_offsets_and_counts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -118,6 +121,29 @@ class DeliveryCoreTests(unittest.TestCase):
             self.assertEqual(tags[273][0], 16)
             self.assertEqual(tags[279][0], 16)
             self.assertEqual(tags[279][2], 2)
+            self.assertEqual(tags[262][2] & 0xFFFF, 1)
+
+    def test_lby_halftoner_is_threshold_not_fm_fallback(self):
+        halftoner = self.delivery.StreamingHalftoner(
+            3,
+            self.delivery.HalftoneSettings(method="LBY", gamma=1.0),
+            4000,
+        )
+        row = bytes(
+            [
+                0,
+                0,
+                0,
+                162,
+                162,
+                162,
+                255,
+                255,
+                255,
+            ]
+        )
+        result = halftoner.process_rgb_row(0, row)
+        self.assertEqual(list(result), [True, True, False])
 
     def test_generate_delivery_outputs_writes_expected_files_and_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:

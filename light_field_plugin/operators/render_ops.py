@@ -17,9 +17,9 @@ from .create_ops import apply_light_field_parameters, apply_output_settings
 
 
 FORMAT_EXTENSIONS = {
+    "JPG": ".jpg",
     "PNG": ".png",
     "TIFF": ".tif",
-    "FILM_TIFF": ".tif",
 }
 
 
@@ -71,8 +71,6 @@ def _is_1bit_tiff(path: str) -> bool:
 def _is_completed_render_file(path: str, props) -> bool:
     if not os.path.exists(path):
         return False
-    if props.output_file_format == "FILM_TIFF":
-        return _is_1bit_tiff(path)
     return True
 
 
@@ -88,6 +86,19 @@ def _set_image_settings(scene, file_format: str) -> None:
             settings.tiff_codec = "NONE"
         except Exception:
             pass
+    if file_format == "JPEG":
+        if hasattr(settings, "quality"):
+            props = getattr(scene, "light_field_props", None)
+            settings.quality = int(getattr(props, "jpeg_quality", 95))
+        if hasattr(scene, "view_settings"):
+            try:
+                scene.view_settings.view_transform = "Standard"
+            except Exception:
+                pass
+            try:
+                scene.view_settings.look = "None"
+            except Exception:
+                pass
     scene.render.use_file_extension = True
 
 
@@ -100,9 +111,14 @@ def _capture_render_settings(scene) -> dict:
         "use_file_extension": scene.render.use_file_extension,
         "file_format": settings.file_format,
     }
-    for key in ("color_mode", "color_depth", "tiff_codec"):
+    for key in ("color_mode", "color_depth", "tiff_codec", "quality"):
         if hasattr(settings, key):
             captured[key] = getattr(settings, key)
+    if hasattr(scene, "view_settings"):
+        captured["view_transform"] = scene.view_settings.view_transform
+        captured["look"] = scene.view_settings.look
+        captured["exposure"] = scene.view_settings.exposure
+        captured["gamma"] = scene.view_settings.gamma
     return captured
 
 
@@ -113,9 +129,16 @@ def _restore_render_settings(scene, captured: dict) -> None:
     scene.render.resolution_y = captured["resolution_y"]
     scene.render.use_file_extension = captured["use_file_extension"]
     settings.file_format = captured["file_format"]
-    for key in ("color_mode", "color_depth", "tiff_codec"):
+    for key in ("color_mode", "color_depth", "tiff_codec", "quality"):
         if key in captured and hasattr(settings, key):
             setattr(settings, key, captured[key])
+    if hasattr(scene, "view_settings"):
+        for key in ("view_transform", "look", "exposure", "gamma"):
+            if key in captured and hasattr(scene.view_settings, key):
+                try:
+                    setattr(scene.view_settings, key, captured[key])
+                except Exception:
+                    pass
 
 
 def _safe_redraw() -> None:
@@ -171,20 +194,12 @@ def _render_still_to_path(context, props, output_base: str) -> str:
     scene = context.scene
     apply_output_settings(scene)
 
-    if props.output_file_format == "FILM_TIFF":
-        source_path = output_base + "_continuous.png"
-        final_path = output_base + ".tif"
-        _set_image_settings(scene, "PNG")
-        scene.render.filepath = source_path
-        bpy.ops.render.render(write_still=True)
-        _export_film_tiff_from_source(source_path, final_path, props)
-        if not props.keep_continuous_source and os.path.exists(source_path):
-            os.remove(source_path)
-        return final_path
-
     if props.output_file_format == "TIFF":
         final_path = output_base + ".tif"
         _set_image_settings(scene, "TIFF")
+    elif props.output_file_format == "JPG":
+        final_path = output_base + ".jpg"
+        _set_image_settings(scene, "JPEG")
     else:
         final_path = output_base + ".png"
         _set_image_settings(scene, "PNG")
@@ -198,22 +213,10 @@ def _render_animation_to_dir(context, props, camera_dir: str, frame_start: int, 
     scene = context.scene
     apply_output_settings(scene)
 
-    if props.output_file_format == "FILM_TIFF":
-        source_prefix = os.path.join(camera_dir, "frame_continuous_")
-        _set_image_settings(scene, "PNG")
-        scene.render.filepath = source_prefix
-        bpy.ops.render.render(animation=True)
-
-        for frame in range(frame_start, frame_end + 1):
-            source_path = os.path.join(camera_dir, f"frame_continuous_{frame:04d}.png")
-            final_path = os.path.join(camera_dir, f"frame_{frame:04d}.tif")
-            _export_film_tiff_from_source(source_path, final_path, props)
-            if not props.keep_continuous_source and os.path.exists(source_path):
-                os.remove(source_path)
-        return
-
     if props.output_file_format == "TIFF":
         _set_image_settings(scene, "TIFF")
+    elif props.output_file_format == "JPG":
+        _set_image_settings(scene, "JPEG")
     else:
         _set_image_settings(scene, "PNG")
     scene.render.filepath = os.path.join(camera_dir, "frame_")

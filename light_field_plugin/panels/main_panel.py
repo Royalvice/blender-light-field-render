@@ -154,8 +154,9 @@ class LIGHTFIELD_PT_render_settings(Panel):
         layout.separator()
         col = layout.column(align=True)
         col.prop(props, "output_file_format", text="输出格式")
-        if props.output_file_format == "FILM_TIFF":
-            col.prop(props, "keep_continuous_source")
+        if props.output_file_format == "JPG":
+            col.prop(props, "jpeg_quality", text="JPG 质量")
+            col.label(text="JPG 输出会强制使用 Standard 色彩管理。", icon="INFO")
 
         layout.separator()
         col = layout.column(align=True)
@@ -244,11 +245,11 @@ class LIGHTFIELD_PT_delivery_output(Panel):
         col.prop(props, "interlace_angle", text="Angle (°)")
         col.prop(props, "interlace_offset", text="Offset")
         col.prop(props, "interlace_reverse_views", text="反转视角顺序")
-        if props.film_halftone_method == "AM" and abs(props.interlace_angle) < 1.0e-6:
-            col.label(text="当前可使用 Native AM 快速路径", icon="CHECKMARK")
+        col.label(text="交织模式：整像素交织", icon="CHECKMARK")
+        if abs(props.interlace_angle) < 1.0e-6:
+            col.label(text="Angle=0° 可使用 Native 快速路径", icon="CHECKMARK")
         else:
-            col.label(text="当前不会使用 Native 快速路径", icon="ERROR")
-            col.label(text="快速路径要求：AM 挂网 + Angle=0°")
+            col.label(text="Angle 非 0° 时不会使用 Native 快速路径", icon="ERROR")
 
         layout.separator()
         col = layout.column(align=True)
@@ -260,6 +261,7 @@ class LIGHTFIELD_PT_delivery_output(Panel):
             col.label(text="快速模式：跳过 interlaced.tif")
             col.label(text="输出 interlaced_preview.png 用于检查")
         col.label(text="film_1bit.tif / delivery_manifest.json")
+        col.label(text="1-bit 输出算法：LBY-like近似", icon="INFO")
 
         layout.separator()
         col = layout.column(align=True)

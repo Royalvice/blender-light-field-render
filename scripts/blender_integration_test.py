@@ -86,7 +86,7 @@ def assert_1bit_tiff(path: Path, width: int, height: int):
     assert tags[257][2] == height, tags[257]
     assert (tags[258][2] & 0xFFFF) == 1, tags[258]
     assert (tags[259][2] & 0xFFFF) == 1, tags[259]
-    assert (tags[262][2] & 0xFFFF) == 0, tags[262]
+    assert (tags[262][2] & 0xFFFF) == 1, tags[262]
     assert (tags[277][2] & 0xFFFF) == 1, tags[277]
 
 
@@ -123,7 +123,8 @@ def assert_localized_ui(scene):
     props_rna = scene.light_field_props.bl_rna.properties
     assert props_rna["output_file_format"].name == "输出格式", props_rna["output_file_format"].name
     assert props_rna["auto_apply_parameters"].name == "拖动结束后自动应用", props_rna["auto_apply_parameters"].name
-    assert props_rna["output_file_format"].enum_items["FILM_TIFF"].name == "1-bit 菲林 TIFF"
+    assert props_rna["output_file_format"].enum_items["JPG"].name == "JPG"
+    assert props_rna["jpeg_quality"].name == "JPG 质量", props_rna["jpeg_quality"].name
     assert props_rna["delivery_width_mm"].name == "交付宽度", props_rna["delivery_width_mm"].name
 
 
@@ -157,28 +158,20 @@ def main():
     assert result == {"FINISHED"}, result
     assert len([obj for obj in bpy.data.objects if obj.name.startswith("LF_Camera_")]) == 3
 
-    for fmt, expected_ext in (("PNG", ".png"), ("TIFF", ".tif"), ("FILM_TIFF", ".tif")):
+    for fmt, expected_ext in (("JPG", ".jpg"), ("PNG", ".png"), ("TIFF", ".tif")):
         props.output_file_format = fmt
-        props.keep_continuous_source = False
         result = bpy.ops.lightfield.render_frame()
         assert result == {"FINISHED"}, (fmt, result)
         expected = Path(out_dir) / "frame_0001" / f"camera_000{expected_ext}"
         assert expected.exists(), f"Missing {expected}"
-        if fmt == "PNG":
-            assert_blender_image_size(expected, 64, 48)
-        elif fmt == "TIFF":
-            assert_blender_image_size(expected, 64, 48)
-        else:
-            assert_1bit_tiff(expected, 64, 48)
-            assert not (Path(out_dir) / "frame_0001" / "camera_000_continuous.png").exists()
+        assert_blender_image_size(expected, 64, 48)
 
-    props.output_file_format = "FILM_TIFF"
+    props.output_file_format = "JPG"
     result = bpy.ops.lightfield.render_animation()
     assert result == {"FINISHED"}, result
-    expected = Path(out_dir) / "camera_000" / "frame_0001.tif"
+    expected = Path(out_dir) / "camera_000" / "frame_0001.jpg"
     assert expected.exists(), f"Missing {expected}"
-    assert_1bit_tiff(expected, 64, 48)
-    assert not (Path(out_dir) / "camera_000" / "frame_continuous_0001.png").exists()
+    assert_blender_image_size(expected, 64, 48)
 
     props.delivery_width_mm = 5.08
     props.delivery_height_mm = 2.54
@@ -188,7 +181,7 @@ def main():
     props.interlace_angle = 0.0
     props.interlace_offset = 0.0
     props.interlace_reverse_views = False
-    props.film_halftone_method = "AM"
+    props.film_halftone_method = "LBY"
     props.delivery_write_interlaced_tiff = False
 
     result = bpy.ops.lightfield.generate_delivery()
@@ -210,6 +203,11 @@ def main():
     assert manifest["delivery"]["ppi"] == 100, manifest["delivery"]
     assert manifest["delivery"]["write_interlaced_tiff"] is False, manifest["delivery"]
     assert manifest["source_views"]["camera_count"] == 3, manifest["source_views"]
+    assert manifest["source_views"]["source_format"] == "JPG", manifest["source_views"]
+    assert manifest["source_views"]["files"][0] == "camera_000.jpg", manifest["source_views"]
+    assert manifest["halftone"]["method"] == "LBY", manifest["halftone"]
+    assert manifest["halftone"]["threshold_luma_0_255"] == 178, manifest["halftone"]
+    assert manifest["halftone"]["black_is_zero"] is True, manifest["halftone"]
     assert manifest["files"]["interlaced_tiff"] is None, manifest["files"]
     assert manifest["files"]["film_1bit_tiff"] == "film_1bit.tif", manifest["files"]
 

@@ -11,11 +11,12 @@ The repository is now organized around the Blender add-on. The older Three.js vi
 - Visualizes the focal plane and display depth volume with non-rendered helper objects.
 - Supports single-frame rendering across all cameras.
 - Supports animation rendering across all cameras and a selected frame range.
-- Supports PNG, continuous TIFF, and halftoned 1-bit Film TIFF output.
+- Supports JPG, PNG, and continuous TIFF source-view rendering. JPG is the default vendor handoff format.
+- Supports whole-pixel PE interlacing and LBY-like 1-bit print TIFF output.
 - Generates final delivery interlace files from customer physical size in mm plus PPI.
 - Outputs 2048px preview PNG, 1-bit film TIFF, and a JSON manifest by default, with optional full-size continuous interlaced TIFF.
 - Automatically writes BigTIFF for continuous interlaced output when the file exceeds classic TIFF limits.
-- Uses bundled NumPy and a Windows native accelerator for large AM film delivery; no user Python package install is required.
+- Uses bundled NumPy and a Windows native accelerator where applicable; no user Python package install is required.
 - Avoids UI stalls by deferring heavy camera-array updates while sliders are dragged.
 - Tracks render progress and can resume from existing output files.
 
@@ -29,7 +30,7 @@ The repository is now organized around the Blender add-on. The older Three.js vi
 Use the release ZIP asset named like:
 
 ```text
-light_field_render-v0.1.14.zip
+light_field_render-v0.1.15.zip
 ```
 
 Then install it in Blender:
@@ -95,7 +96,16 @@ This avoids forcing Blender to render every camera at the final print resolution
 
 For very large delivery sizes, the add-on switches `interlaced.tif` to BigTIFF automatically. For example, `194 x 345 mm @ 4000 PPI` is about `30551 x 54331` pixels, so the RGB continuous TIFF is roughly 5 GB and cannot be represented by classic TIFF.
 
-The large-delivery path has been stress-tested with 150 source views at `2160 x 3651`, `194 x 345 mm @ 4000 PPI`, `PE=52.64`, and AM `200 LPI / 45°`. On the test workstation, fast film mode generated `film_1bit.tif`, preview, and manifest in about 9.8 seconds. Enabling optional continuous-tone `interlaced.tif` writes an additional roughly 5 GB BigTIFF and is limited mainly by disk write speed.
+The large-delivery path has been stress-tested with 150 source views at `2160 x 3651`, `30551 x 54342` final pixels, `4000 PPI`, `PE=52.64`, reversed view order, and the native `LBY-like近似` path. With plugin-format cached source PNGs already present, the test workstation generated `film_1bit.tif`, preview, and manifest in about `7.36s`; native-ready working set was about `3.34 GiB`, with sampled peak working set about `6.64 GiB`.
+
+### v0.1.15 Delivery Semantics
+
+- Source-view output defaults to `JPG` at quality `95`; file names are `camera_000.jpg`, `camera_001.jpg`, and so on.
+- JPG source rendering temporarily forces Blender color management to `Standard` and restores the original scene settings after rendering.
+- Final delivery reads those disk JPG files before interlacing so the plugin uses the same source artifacts handed to the factory.
+- Interlacing is whole-pixel: one final RGB pixel is selected from one source view, then copied to all RGB channels. The PE period is calculated as `PPI / PE`.
+- `film_1bit.tif` uses uncompressed 1-bit TIFF with `PhotometricInterpretation=1`, so decoded pixels follow `0=black` and `1=white`.
+- The exposed print algorithm is `LBY-like近似`. It is a deterministic whole-pixel interlace plus luma-threshold 1-bit conversion fitted from the provided 150 JPG input views and factory TIFF pair. Full-image packed-bit fitting selected threshold `178`; the generated full-size TIFF still differs from the factory TIFF by about `9.2867%`, so this is not a bitwise clone of the factory RIP.
 
 ## Build Release ZIP
 

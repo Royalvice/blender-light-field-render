@@ -198,42 +198,40 @@ class LightFieldProperties(PropertyGroup):
         name="输出格式",
         description="光场渲染输出的图像格式",
         items=[
+            ("JPG", "JPG", "高质量 JPEG 源视角图，默认用于厂商交付"),
             ("PNG", "PNG", "连续调 PNG 输出"),
             ("TIFF", "TIFF", "Blender 输出的连续调 TIFF"),
-            (
-                "FILM_TIFF",
-                "1-bit 菲林 TIFF",
-                "先渲染连续调源图，再导出挂网后的 1-bit TIFF",
-            ),
         ],
-        default="PNG",
+        default="JPG",
         update=mark_render_settings_dirty,
     )
 
-    keep_continuous_source: BoolProperty(
-        name="保留连续调源图",
-        description="保留用于生成 1-bit 菲林 TIFF 的临时连续调 PNG 源图",
-        default=False,
+    jpeg_quality: IntProperty(
+        name="JPG 质量",
+        description="源视角 JPG 输出质量，默认 95",
+        default=95,
+        min=1,
+        max=100,
         update=mark_render_settings_dirty,
     )
 
     film_halftone_method: EnumProperty(
-        name="挂网方式",
-        description="1-bit 菲林 TIFF 导出的挂网策略",
+        name="打印 TIFF 算法",
+        description="最终交付 1-bit TIFF 使用的算法；当前只保留 LBY-like 近似",
         items=[
-            ("FM", "FM / 误差扩散", "固定大小网点按密度分布，通常更适合光栅/光场流程"),
-            ("AM", "AM / 聚集网点", "传统调幅挂网，由 LPI、网角和网点形状控制"),
+            ("LBY", "LBY-like近似", "根据刘博阳输入/输出样本反推的近似打印 TIFF 算法"),
         ],
-        default="AM",
+        default="LBY",
         update=mark_render_settings_dirty,
     )
 
-    film_lpi: IntProperty(
+    film_lpi: FloatProperty(
         name="LPI",
-        description="AM 挂网线数，单位为每英寸线数",
-        default=200,
-        min=30,
-        max=600,
+        description="兼容旧参数；LBY-like 主流程不把 PE 当作挂网 LPI",
+        default=200.0,
+        min=1.0,
+        max=1200.0,
+        precision=3,
         update=mark_render_settings_dirty,
     )
 

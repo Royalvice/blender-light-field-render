@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import os
+import shutil
+import tempfile
 import threading
 import time
 import traceback
+from array import array
 
 import bpy
 from bpy.types import Operator
@@ -21,7 +24,9 @@ from ..core.delivery import (
     generate_delivery_outputs,
     is_large_output,
     make_delivery_paths,
+    read_jpeg_info,
     read_png_info,
+    write_rgb_png,
     write_error_log,
 )
 
@@ -47,7 +52,7 @@ def _frame_dir(output_path: str, frame: int) -> str:
 
 
 def _source_path(frame_dir: str, camera_index: int) -> str:
-    return os.path.join(frame_dir, f"camera_{camera_index:03d}.png")
+    return os.path.join(frame_dir, f"camera_{camera_index:03d}.jpg")
 
 
 def _source_paths(frame_dir: str, camera_count: int) -> list[str]:
@@ -58,6 +63,9 @@ def _source_is_valid(path: str, width: int, height: int) -> bool:
     if not os.path.exists(path):
         return False
     try:
+        if path.lower().endswith((".jpg", ".jpeg")):
+            img_width, img_height = read_jpeg_info(path)
+            return img_width == width and img_height == height
         img_width, img_height, bit_depth, color_type = read_png_info(path)
     except Exception:
         return False
@@ -102,6 +110,7 @@ def _build_delivery_settings(
         confirm_large_output=props.delivery_confirm_large_output,
         write_interlaced_tiff=write_interlaced_tiff,
         write_film_tiff=write_film_tiff,
+        source_format="JPG",
     )
 
 
@@ -138,7 +147,7 @@ def _render_source_views(context, frame_dir: str, indices: list[int], progress_c
     props = scene.light_field_props
     control = get_light_field_control()
     os.makedirs(frame_dir, exist_ok=True)
-    _set_image_settings(scene, "PNG")
+    _set_image_settings(scene, "JPEG")
     total = len(indices)
     for completed, camera_index in enumerate(indices, start=1):
         if props.delivery_stop_requested:
@@ -154,11 +163,58 @@ def _render_single_source_view(context, frame_dir: str, camera_index: int) -> No
     scene = context.scene
     control = get_light_field_control()
     os.makedirs(frame_dir, exist_ok=True)
-    _set_image_settings(scene, "PNG")
+    _set_image_settings(scene, "JPEG")
     control.set_active_camera(camera_index)
     scene.render.filepath = _source_path(frame_dir, camera_index)
     bpy.ops.render.render(write_still=True)
     _safe_redraw()
+
+
+def _linear_to_srgb_byte(value: float) -> int:
+    value = max(0.0, min(1.0, float(value)))
+    if value <= 0.0031308:
+        srgb = 12.92 * value
+    else:
+        srgb = 1.055 * (value ** (1.0 / 2.4)) - 0.055
+    return max(0, min(255, int(round(srgb * 255.0))))
+
+
+def _blender_image_rgb_rows(image):
+    width, height = int(image.size[0]), int(image.size[1])
+    pixels = array("f", [0.0]) * (width * height * 4)
+    image.pixels.foreach_get(pixels)
+    rows = []
+    for y in range(height):
+        source_y = height - 1 - y
+        row = bytearray(width * 3)
+        for x in range(width):
+            src = (source_y * width + x) * 4
+            dst = x * 3
+            row[dst] = _linear_to_srgb_byte(pixels[src])
+            row[dst + 1] = _linear_to_srgb_byte(pixels[src + 1])
+            row[dst + 2] = _linear_to_srgb_byte(pixels[src + 2])
+        rows.append(bytes(row))
+    return width, height, rows
+
+
+def _cache_jpg_sources_as_png(context, source_paths: list[str], progress_callback, stop_callback) -> tuple[str, list[str]]:
+    cache_dir = tempfile.mkdtemp(prefix="light_field_delivery_sources_")
+    cached_paths = []
+    total = len(source_paths)
+    for index, source_path in enumerate(source_paths, start=1):
+        if stop_callback():
+            raise DeliveryCancelled("用户停止了交付生成")
+        progress_callback("解码 JPG 源视角", index, total, os.path.basename(source_path))
+        image = bpy.data.images.load(source_path, check_existing=False)
+        try:
+            width, height, rows = _blender_image_rgb_rows(image)
+        finally:
+            bpy.data.images.remove(image)
+        cached_path = os.path.join(cache_dir, f"camera_{index - 1:03d}.png")
+        write_rgb_png(cached_path, width, height, rows)
+        cached_paths.append(cached_path)
+        _safe_redraw()
+    return cache_dir, cached_paths
 
 
 class _DeliveryRunnerMixin:
@@ -179,6 +235,8 @@ class _DeliveryRunnerMixin:
         self.start_time = time.perf_counter()
         self.wm = context.window_manager
         self.wm_progress_active = False
+        self.source_cache_dir = None
+        self.worker_source_paths = None
 
     def _build_settings(self, context) -> DeliverySettings:
         return _build_delivery_settings(context)
@@ -254,8 +312,16 @@ class _DeliveryRunnerMixin:
             self.props.resolution_y,
         )
         if invalid_after_render:
-            missing = ", ".join(f"camera_{idx:03d}.png" for idx in invalid_after_render[:5])
-            raise DeliveryError(f"源视角 PNG 不完整或尺寸不匹配: {missing}")
+            missing = ", ".join(f"camera_{idx:03d}.jpg" for idx in invalid_after_render[:5])
+            raise DeliveryError(f"源视角 JPG 不完整或尺寸不匹配: {missing}")
+
+    def _prepare_worker_sources(self, context) -> None:
+        self.source_cache_dir, self.worker_source_paths = _cache_jpg_sources_as_png(
+            context,
+            self.source_paths,
+            self._progress,
+            lambda: bool(self.props.delivery_stop_requested),
+        )
 
     def _finish_success(self, result):
         props = self.props
@@ -281,6 +347,9 @@ class _DeliveryRunnerMixin:
             self.scene.camera = self.original_camera
         if self.captured:
             _restore_render_settings(self.scene, self.captured)
+        if self.source_cache_dir:
+            shutil.rmtree(self.source_cache_dir, ignore_errors=True)
+            self.source_cache_dir = None
         if self.wm_progress_active:
             self.wm.progress_end()
             self.wm_progress_active = False
@@ -309,9 +378,10 @@ class _DeliveryRunnerMixin:
             self._prepare_sources(context)
             _render_source_views(context, self.frame_dir, self.invalid_indices, self._progress)
             self._verify_sources()
+            self._prepare_worker_sources(context)
 
             result = generate_delivery_outputs(
-                self.source_paths,
+                self.worker_source_paths,
                 self.output_root,
                 self.settings,
                 progress_callback=self._progress,
@@ -381,6 +451,7 @@ class _DeliveryRunnerMixin:
                 return self._modal_render_sources(context)
             if self._state == "verify_sources":
                 self._verify_sources()
+                self._prepare_worker_sources(context)
                 self._start_worker()
                 self._state = "wait_worker"
                 return {"RUNNING_MODAL"}
@@ -423,7 +494,7 @@ class _DeliveryRunnerMixin:
         def worker():
             try:
                 self._worker_result = generate_delivery_outputs(
-                    self.source_paths,
+                    self.worker_source_paths,
                     self.output_root,
                     self.settings,
                     progress_callback=progress,

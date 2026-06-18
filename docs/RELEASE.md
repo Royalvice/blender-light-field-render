@@ -47,30 +47,41 @@ Use this checklist when publishing a GitHub Release.
 Recommended tag format:
 
 ```text
-v0.1.14
+v0.1.15
 ```
 
 Recommended title:
 
 ```text
-Light Field Render v0.1.14
+Light Field Render v0.1.15
 ```
 
 Release asset:
 
 ```text
-dist/light_field_render-v0.1.14.zip
+dist/light_field_render-v0.1.15.zip
 ```
 
 Suggested release notes:
 
 ```markdown
-## Light Field Render v0.1.14
+## Light Field Render v0.1.15
 
-Interlaced-only delivery release.
+JPG source delivery and LBY-like print TIFF release.
 
 ### Features
 
+- Defaults source-view output to JPG quality 95 while retaining PNG and continuous TIFF options.
+- Forces Standard color management while writing JPG source views, then restores the scene settings.
+- Reads disk JPG source views for final delivery so factory handoff inputs and plugin inputs match.
+- Changes final delivery interlacing to whole-pixel view selection instead of RGB subpixel view selection.
+- Keeps `只生成连续调交织图` for interlaced-only output without `film_1bit.tif`.
+- Replaces exposed final print algorithms with `LBY-like近似`.
+- Writes `film_1bit.tif` as uncompressed 1-bit TIFF with `PhotometricInterpretation=1` (`0=black`, `1=white`).
+- Records the fitted LBY-like threshold and approximation note in `delivery_manifest.json`.
+- Full-image fitting on the provided 150 JPG -> factory TIFF pair selected threshold `178`; generated output still has about `9.2867%` pixel mismatch, so this release labels the algorithm as approximate rather than bitwise-identical.
+- Native LBY generation produced a `30551 x 54342` 1-bit TIFF from 150 cached source views in about `7.37s` after plugin-format PNG cache existed; native-ready working set was about `3.34 GiB`, with sampled peak working set about `6.64 GiB`.
+- Adds local real-pair analysis tooling under `scripts/analyze_lby_pair.py` without committing the large sample images.
 - Creates a configurable linear off-axis light-field camera array.
 - Visualizes focal plane and display depth volume.
 - Supports single-frame rendering across all cameras.
@@ -108,5 +119,5 @@ Interlaced-only delivery release.
 
 ### Installation
 
-Download `light_field_render-v0.1.14.zip`, then install it from Blender via `Edit > Preferences > Add-ons > Install...`.
+Download `light_field_render-v0.1.15.zip`, then install it from Blender via `Edit > Preferences > Add-ons > Install...`.
 ```

@@ -194,7 +194,27 @@ Safety behavior:
 6. Increase camera count and resolution.
 7. Generate the final current-frame delivery files.
 
-## 10. Troubleshooting
+## 10. v0.1.15 Factory Delivery Workflow
+
+Use this workflow when matching the current vendor handoff:
+
+1. Set source-view output format to `JPG`.
+2. Keep `JPG 质量` at the default `95` unless the factory explicitly requests another value.
+3. Render or generate delivery from the current frame. Source views are written as `frame_0001/camera_000.jpg` through `camera_149.jpg` for a 150-view setup.
+4. Use `只生成连续调交织图` when you only need `interlaced.tif`, `interlaced_preview.png`, and `delivery_manifest.json`.
+5. Use `生成当前帧交付文件` when you need the print TIFF; this writes `film_1bit.tif` in addition to the preview and manifest.
+
+Current delivery rules:
+
+- JPG output temporarily uses Blender `Standard` color management, then restores the scene's original view settings.
+- Final delivery reads the disk JPG source views, not hidden in-memory render buffers.
+- Interlacing is whole-pixel. One output pixel chooses one source view; RGB subpixels are no longer assigned to separate views.
+- PE is interpreted as a physical line count: the output period in pixels is `PPI / PE`.
+- The only exposed print algorithm is `LBY-like近似`.
+- `film_1bit.tif` is uncompressed 1-bit TIFF with `PhotometricInterpretation=1`, meaning decoded pixels are `0=black` and `1=white`.
+- `LBY-like近似` currently uses fitted threshold `178`, also recorded in `delivery_manifest.json`. Full-image comparison against the provided factory TIFF is about `9.2867%` mismatch, so this is not bitwise-identical to the factory RIP. The available factory pair supports the PE period and reversed view-order direction, but does not prove the exact RIP algorithm; use future input/output pairs to refine or replace the approximation.
+
+## 11. Troubleshooting
 
 If the add-on panel is not visible:
 
@@ -238,7 +258,7 @@ If final delivery looks soft:
 - Increase the normal `输出分辨率 W/H` for source views.
 - The final delivery stage can resample source views to a larger size, but it cannot create detail that was not rendered by Blender.
 
-## 11. Notes For Release Builds
+## 12. Notes For Release Builds
 
 The Blender add-on ZIP must contain the add-on package folder at the ZIP root:
 

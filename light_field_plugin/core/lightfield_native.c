@@ -31,6 +31,7 @@ typedef struct LfBatchJob {
     double inv_gamma;
     int use_gamma;
     int dot_shape;
+    int lby_threshold;
     uint8_t* rgb_out;
     uint8_t* bit_out;
     int row_bytes;
@@ -63,7 +64,7 @@ static void lf_process_rows(const LfBatchJob* job) {
         uint8_t* rgb_row = job->rgb_out ? job->rgb_out + (int64_t)row * job->final_width * 3 : 0;
         uint8_t* bit_row = job->bit_out ? job->bit_out + (int64_t)row * job->row_bytes : 0;
         if (bit_row) {
-            memset(bit_row, 0, (size_t)job->row_bytes);
+            memset(bit_row, job->lby_threshold >= 0 ? 0xFF : 0, (size_t)job->row_bytes);
         }
 
         for (int x = 0; x < job->final_width; ++x) {
@@ -96,6 +97,12 @@ static void lf_process_rows(const LfBatchJob* job) {
 
             if (bit_row) {
                 const double luma = 0.2126 * (double)rgb[0] + 0.7152 * (double)rgb[1] + 0.0722 * (double)rgb[2];
+                if (job->lby_threshold >= 0) {
+                    if (luma <= (double)job->lby_threshold) {
+                        bit_row[x >> 3] &= (uint8_t)~(0x80 >> (x & 7));
+                    }
+                    continue;
+                }
                 double luma_norm = luma / 255.0;
                 if (luma_norm < 0.0) luma_norm = 0.0;
                 if (luma_norm > 1.0) luma_norm = 1.0;
@@ -193,6 +200,101 @@ LF_EXPORT int lf_generate_am_batch(
     base.inv_gamma = 1.0 / (gamma_value > 1.0e-6 ? gamma_value : 1.0e-6);
     base.use_gamma = fabs(gamma_value - 1.0) > 1.0e-6;
     base.dot_shape = dot_shape;
+    base.lby_threshold = -1;
+    base.rgb_out = rgb_out;
+    base.bit_out = bit_out;
+    base.row_bytes = row_bytes;
+
+#ifdef _WIN32
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    int thread_count = (int)info.dwNumberOfProcessors;
+    if (thread_count < 1) thread_count = 1;
+    if (thread_count > batch_rows) thread_count = batch_rows;
+    if (thread_count > 64) thread_count = 64;
+    if (thread_count <= 1) {
+        base.row_begin = 0;
+        base.row_end = batch_rows;
+        lf_process_rows(&base);
+        return 0;
+    }
+
+    HANDLE handles[64];
+    LfBatchJob jobs[64];
+    int handle_count = 0;
+    for (int i = 0; i < thread_count; ++i) {
+        jobs[i] = base;
+        jobs[i].row_begin = (int)(((int64_t)i * batch_rows) / thread_count);
+        jobs[i].row_end = (int)(((int64_t)(i + 1) * batch_rows) / thread_count);
+        handles[handle_count] = CreateThread(0, 0, lf_worker_thread, &jobs[i], 0, 0);
+        if (handles[handle_count]) {
+            ++handle_count;
+        } else {
+            lf_process_rows(&jobs[i]);
+        }
+    }
+    if (handle_count > 0) {
+        WaitForMultipleObjects((DWORD)handle_count, handles, TRUE, INFINITE);
+        for (int i = 0; i < handle_count; ++i) {
+            CloseHandle(handles[i]);
+        }
+    }
+#else
+    base.row_begin = 0;
+    base.row_end = batch_rows;
+    lf_process_rows(&base);
+#endif
+    return 0;
+}
+
+LF_EXPORT int lf_generate_lby_batch(
+    const uint8_t* sources,
+    int source_count,
+    int source_width,
+    int source_height,
+    int final_width,
+    int final_height,
+    int y_start,
+    int batch_rows,
+    const int16_t* view_map,
+    const int32_t* x0_map,
+    const int32_t* x1_map,
+    const float* tx_map,
+    double y_scale,
+    int threshold,
+    uint8_t* rgb_out,
+    uint8_t* bit_out,
+    int row_bytes
+) {
+    if (!sources || !view_map || !x0_map || !x1_map || !tx_map || (!rgb_out && !bit_out)) {
+        return 1;
+    }
+    if (source_count <= 0 || source_width <= 0 || source_height <= 0 ||
+        final_width <= 0 || final_height <= 0 || batch_rows <= 0 || row_bytes <= 0) {
+        return 2;
+    }
+
+    LfBatchJob base;
+    memset(&base, 0, sizeof(base));
+    base.sources = sources;
+    base.source_count = source_count;
+    base.source_width = source_width;
+    base.source_height = source_height;
+    base.final_width = final_width;
+    base.final_height = final_height;
+    base.y_start = y_start;
+    base.view_map = view_map;
+    base.x0_map = x0_map;
+    base.x1_map = x1_map;
+    base.tx_map = tx_map;
+    base.y_scale = y_scale;
+    base.screen_cos = 1.0;
+    base.screen_sin = 0.0;
+    base.cell_size = 1.0;
+    base.inv_gamma = 1.0;
+    base.use_gamma = 0;
+    base.dot_shape = 0;
+    base.lby_threshold = threshold;
     base.rgb_out = rgb_out;
     base.bit_out = bit_out;
     base.row_bytes = row_bytes;

@@ -8,9 +8,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class PluginStaticTests(unittest.TestCase):
-    def test_version_is_0_1_14(self):
+    def test_version_is_0_1_15(self):
         init_text = (REPO_ROOT / "light_field_plugin" / "__init__.py").read_text(encoding="utf-8")
-        self.assertIn('"version": (0, 1, 14)', init_text)
+        self.assertIn('"version": (0, 1, 15)', init_text)
 
     def test_panel_labels_are_localized_in_chinese(self):
         text = (REPO_ROOT / "light_field_plugin" / "panels" / "main_panel.py").read_text(encoding="utf-8")
@@ -32,7 +32,10 @@ class PluginStaticTests(unittest.TestCase):
         text = (REPO_ROOT / "light_field_plugin" / "properties" / "light_field_props.py").read_text(encoding="utf-8")
         for snippet in (
             'name="输出格式"',
-            '"1-bit 菲林 TIFF"',
+            '("JPG", "JPG"',
+            'default="JPG"',
+            'name="JPG 质量"',
+            '"LBY-like近似"',
             'name="拖动结束后自动应用"',
             'name="当前相机"',
             'name="开始帧"',
