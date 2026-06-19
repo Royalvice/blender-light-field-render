@@ -30,7 +30,7 @@ The repository is now organized around the Blender add-on. The older Three.js vi
 Use the release ZIP asset named like:
 
 ```text
-light_field_render-v0.1.15.zip
+light_field_render-v0.1.16.zip
 ```
 
 Then install it in Blender:
@@ -96,16 +96,16 @@ This avoids forcing Blender to render every camera at the final print resolution
 
 For very large delivery sizes, the add-on switches `interlaced.tif` to BigTIFF automatically. For example, `194 x 345 mm @ 4000 PPI` is about `30551 x 54331` pixels, so the RGB continuous TIFF is roughly 5 GB and cannot be represented by classic TIFF.
 
-The large-delivery path has been stress-tested with 150 source views at `2160 x 3651`, `30551 x 54342` final pixels, `4000 PPI`, `PE=52.64`, reversed view order, and the native `LBY-like近似` path. With plugin-format cached source PNGs already present, the test workstation generated `film_1bit.tif`, preview, and manifest in about `7.36s`; native-ready working set was about `3.34 GiB`, with sampled peak working set about `6.64 GiB`.
+The large-delivery path has been stress-tested with 150 JPG source views at `2160 x 3651`, `30551 x 54342` final pixels, `4000 PPI`, `PE=52.64`, reversed view order, and the native `LBY-like近似` path. The current Windows build decodes JPG directly with WIC in the background worker, then generates `film_1bit.tif`, preview, and manifest in about `14.77s` total on the test workstation.
 
-### v0.1.15 Delivery Semantics
+### v0.1.16 Delivery Semantics
 
 - Source-view output defaults to `JPG` at quality `95`; file names are `camera_000.jpg`, `camera_001.jpg`, and so on.
 - JPG source rendering temporarily forces Blender color management to `Standard` and restores the original scene settings after rendering.
-- Final delivery reads those disk JPG files before interlacing so the plugin uses the same source artifacts handed to the factory.
+- Final delivery reads those disk JPG files directly through the native Windows decoder before interlacing, so the UI no longer needs to convert JPGs to temporary PNGs on the main thread.
 - Interlacing is whole-pixel: one final RGB pixel is selected from one source view, then copied to all RGB channels. The PE period is calculated as `PPI / PE`.
 - `film_1bit.tif` uses uncompressed 1-bit TIFF with `PhotometricInterpretation=1`, so decoded pixels follow `0=black` and `1=white`.
-- The exposed print algorithm is `LBY-like近似`. It is a deterministic whole-pixel interlace plus luma-threshold 1-bit conversion fitted from the provided 150 JPG input views and factory TIFF pair. Full-image packed-bit fitting selected threshold `178`; the generated full-size TIFF still differs from the factory TIFF by about `9.2867%`, so this is not a bitwise clone of the factory RIP.
+- The exposed print algorithm is `LBY-like近似`. It is a deterministic whole-pixel interlace plus FM-like dot screen. It is intended to produce real 1-bit dots instead of the previous single-threshold line-art output. It remains an approximation, not a bitwise clone of the factory RIP.
 
 ## Build Release ZIP
 

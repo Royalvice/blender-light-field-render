@@ -47,30 +47,34 @@ Use this checklist when publishing a GitHub Release.
 Recommended tag format:
 
 ```text
-v0.1.15
+v0.1.16
 ```
 
 Recommended title:
 
 ```text
-Light Field Render v0.1.15
+Light Field Render v0.1.16
 ```
 
 Release asset:
 
 ```text
-dist/light_field_render-v0.1.15.zip
+dist/light_field_render-v0.1.16.zip
 ```
 
 Suggested release notes:
 
 ```markdown
-## Light Field Render v0.1.15
+## Light Field Render v0.1.16
 
-JPG source delivery and LBY-like print TIFF release.
+Native JPG loading and FM-like print TIFF fix.
 
 ### Features
 
+- Fixes slow and potentially freezing JPG source loading by decoding JPG directly with native Windows WIC in the background delivery worker.
+- Changes `LBY-like近似` from single-threshold line-art output to a deterministic FM-like dot screen, so `film_1bit.tif` contains real 1-bit dots instead of a mostly white image with a few black lines.
+- Confirms delivery interlace remains whole-pixel PE interlace, not RGB subpixel interlace.
+- Full-size direct-JPG test with 150 source views at `2160 x 3651`, final `30551 x 54342`, `4000 PPI`, `PE=52.64`: total generation time about `14.77s`.
 - Defaults source-view output to JPG quality 95 while retaining PNG and continuous TIFF options.
 - Forces Standard color management while writing JPG source views, then restores the scene settings.
 - Reads disk JPG source views for final delivery so factory handoff inputs and plugin inputs match.
@@ -78,9 +82,7 @@ JPG source delivery and LBY-like print TIFF release.
 - Keeps `只生成连续调交织图` for interlaced-only output without `film_1bit.tif`.
 - Replaces exposed final print algorithms with `LBY-like近似`.
 - Writes `film_1bit.tif` as uncompressed 1-bit TIFF with `PhotometricInterpretation=1` (`0=black`, `1=white`).
-- Records the fitted LBY-like threshold and approximation note in `delivery_manifest.json`.
-- Full-image fitting on the provided 150 JPG -> factory TIFF pair selected threshold `178`; generated output still has about `9.2867%` pixel mismatch, so this release labels the algorithm as approximate rather than bitwise-identical.
-- Native LBY generation produced a `30551 x 54342` 1-bit TIFF from 150 cached source views in about `7.37s` after plugin-format PNG cache existed; native-ready working set was about `3.34 GiB`, with sampled peak working set about `6.64 GiB`.
+- Records the LBY-like FM screen approximation note in `delivery_manifest.json`.
 - Adds local real-pair analysis tooling under `scripts/analyze_lby_pair.py` without committing the large sample images.
 - Creates a configurable linear off-axis light-field camera array.
 - Visualizes focal plane and display depth volume.
@@ -119,5 +121,5 @@ JPG source delivery and LBY-like print TIFF release.
 
 ### Installation
 
-Download `light_field_render-v0.1.15.zip`, then install it from Blender via `Edit > Preferences > Add-ons > Install...`.
+Download `light_field_render-v0.1.16.zip`, then install it from Blender via `Edit > Preferences > Add-ons > Install...`.
 ```

@@ -194,7 +194,7 @@ Safety behavior:
 6. Increase camera count and resolution.
 7. Generate the final current-frame delivery files.
 
-## 10. v0.1.15 Factory Delivery Workflow
+## 10. v0.1.16 Factory Delivery Workflow
 
 Use this workflow when matching the current vendor handoff:
 
@@ -207,12 +207,12 @@ Use this workflow when matching the current vendor handoff:
 Current delivery rules:
 
 - JPG output temporarily uses Blender `Standard` color management, then restores the scene's original view settings.
-- Final delivery reads the disk JPG source views, not hidden in-memory render buffers.
+- Final delivery reads the disk JPG source views through the native Windows decoder, not hidden in-memory render buffers and not a slow UI-thread JPG-to-PNG conversion step.
 - Interlacing is whole-pixel. One output pixel chooses one source view; RGB subpixels are no longer assigned to separate views.
 - PE is interpreted as a physical line count: the output period in pixels is `PPI / PE`.
 - The only exposed print algorithm is `LBY-like近似`.
 - `film_1bit.tif` is uncompressed 1-bit TIFF with `PhotometricInterpretation=1`, meaning decoded pixels are `0=black` and `1=white`.
-- `LBY-like近似` currently uses fitted threshold `178`, also recorded in `delivery_manifest.json`. Full-image comparison against the provided factory TIFF is about `9.2867%` mismatch, so this is not bitwise-identical to the factory RIP. The available factory pair supports the PE period and reversed view-order direction, but does not prove the exact RIP algorithm; use future input/output pairs to refine or replace the approximation.
+- `LBY-like近似` currently uses a deterministic FM-like dot screen, also recorded in `delivery_manifest.json`. This fixes the previous single-threshold output that looked like a mostly white image with a few black lines. The available factory pair supports the PE period and reversed view-order direction, but does not prove the exact RIP algorithm; use future input/output pairs to refine or replace the approximation.
 
 ## 11. Troubleshooting
 

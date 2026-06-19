@@ -123,27 +123,24 @@ class DeliveryCoreTests(unittest.TestCase):
             self.assertEqual(tags[279][2], 2)
             self.assertEqual(tags[262][2] & 0xFFFF, 1)
 
-    def test_lby_halftoner_is_threshold_not_fm_fallback(self):
+    def test_lby_halftoner_outputs_deterministic_dot_screen(self):
         halftoner = self.delivery.StreamingHalftoner(
-            3,
+            16,
             self.delivery.HalftoneSettings(method="LBY", gamma=1.0),
             4000,
         )
-        row = bytes(
-            [
-                0,
-                0,
-                0,
-                162,
-                162,
-                162,
-                255,
-                255,
-                255,
-            ]
-        )
+        row = bytes([128, 128, 128] * 16)
         result = halftoner.process_rgb_row(0, row)
-        self.assertEqual(list(result), [True, True, False])
+        self.assertGreater(sum(bool(value) for value in result), 0)
+        self.assertLess(sum(bool(value) for value in result), 16)
+
+        extremes_halftoner = self.delivery.StreamingHalftoner(
+            2,
+            self.delivery.HalftoneSettings(method="LBY", gamma=1.0),
+            4000,
+        )
+        extremes = extremes_halftoner.process_rgb_row(1, bytes([0, 0, 0, 255, 255, 255]))
+        self.assertEqual(list(extremes), [True, False])
 
     def test_generate_delivery_outputs_writes_expected_files_and_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:

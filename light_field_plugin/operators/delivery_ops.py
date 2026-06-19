@@ -24,6 +24,7 @@ from ..core.delivery import (
     generate_delivery_outputs,
     is_large_output,
     make_delivery_paths,
+    native_jpeg_available,
     read_jpeg_info,
     read_png_info,
     write_rgb_png,
@@ -217,6 +218,10 @@ def _cache_jpg_sources_as_png(context, source_paths: list[str], progress_callbac
     return cache_dir, cached_paths
 
 
+def _use_direct_jpg_sources() -> bool:
+    return native_jpeg_available()
+
+
 class _DeliveryRunnerMixin:
     def execute(self, context):
         if bpy.app.background or context.window is None:
@@ -316,6 +321,11 @@ class _DeliveryRunnerMixin:
             raise DeliveryError(f"源视角 JPG 不完整或尺寸不匹配: {missing}")
 
     def _prepare_worker_sources(self, context) -> None:
+        if _use_direct_jpg_sources():
+            self.source_cache_dir = None
+            self.worker_source_paths = self.source_paths
+            self._progress("准备 JPG 源视角", self.props.camera_count, self.props.camera_count, "使用 Native 直接解码")
+            return
         self.source_cache_dir, self.worker_source_paths = _cache_jpg_sources_as_png(
             context,
             self.source_paths,

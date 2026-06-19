@@ -5,7 +5,10 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <wincodec.h>
 #define LF_EXPORT __declspec(dllexport)
+#pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "windowscodecs.lib")
 #else
 #define LF_EXPORT
 #endif
@@ -32,10 +35,20 @@ typedef struct LfBatchJob {
     int use_gamma;
     int dot_shape;
     int lby_threshold;
+    int lby_mode;
     uint8_t* rgb_out;
     uint8_t* bit_out;
     int row_bytes;
 } LfBatchJob;
+
+static inline uint32_t lf_hash_u32(uint32_t x) {
+    x ^= x >> 16;
+    x *= 0x7feb352dU;
+    x ^= x >> 15;
+    x *= 0x846ca68bU;
+    x ^= x >> 16;
+    return x;
+}
 
 static inline uint8_t clamp_round_u8(float value) {
     if (value <= 0.0f) {
@@ -64,7 +77,7 @@ static void lf_process_rows(const LfBatchJob* job) {
         uint8_t* rgb_row = job->rgb_out ? job->rgb_out + (int64_t)row * job->final_width * 3 : 0;
         uint8_t* bit_row = job->bit_out ? job->bit_out + (int64_t)row * job->row_bytes : 0;
         if (bit_row) {
-            memset(bit_row, job->lby_threshold >= 0 ? 0xFF : 0, (size_t)job->row_bytes);
+            memset(bit_row, job->lby_mode ? 0xFF : 0, (size_t)job->row_bytes);
         }
 
         for (int x = 0; x < job->final_width; ++x) {
@@ -97,8 +110,20 @@ static void lf_process_rows(const LfBatchJob* job) {
 
             if (bit_row) {
                 const double luma = 0.2126 * (double)rgb[0] + 0.7152 * (double)rgb[1] + 0.0722 * (double)rgb[2];
-                if (job->lby_threshold >= 0) {
-                    if (luma <= (double)job->lby_threshold) {
+                if (job->lby_mode) {
+                    double luma_norm = luma / 255.0;
+                    if (luma_norm < 0.0) luma_norm = 0.0;
+                    if (luma_norm > 1.0) luma_norm = 1.0;
+                    double darkness = 1.0 - luma_norm;
+                    if (job->use_gamma) {
+                        darkness = pow(darkness, job->inv_gamma);
+                    }
+                    darkness *= (double)job->lby_threshold / 178.0;
+                    if (darkness < 0.0) darkness = 0.0;
+                    if (darkness > 1.0) darkness = 1.0;
+                    const uint32_t h = lf_hash_u32((uint32_t)x * 73856093U ^ (uint32_t)final_y * 19349663U);
+                    const double threshold = (double)(h & 0xFFFFU) / 65536.0;
+                    if (threshold < darkness) {
                         bit_row[x >> 3] &= (uint8_t)~(0x80 >> (x & 7));
                     }
                     continue;
@@ -201,6 +226,7 @@ LF_EXPORT int lf_generate_am_batch(
     base.use_gamma = fabs(gamma_value - 1.0) > 1.0e-6;
     base.dot_shape = dot_shape;
     base.lby_threshold = -1;
+    base.lby_mode = 0;
     base.rgb_out = rgb_out;
     base.bit_out = bit_out;
     base.row_bytes = row_bytes;
@@ -295,6 +321,7 @@ LF_EXPORT int lf_generate_lby_batch(
     base.use_gamma = 0;
     base.dot_shape = 0;
     base.lby_threshold = threshold;
+    base.lby_mode = 1;
     base.rgb_out = rgb_out;
     base.bit_out = bit_out;
     base.row_bytes = row_bytes;
@@ -340,3 +367,113 @@ LF_EXPORT int lf_generate_lby_batch(
 #endif
     return 0;
 }
+
+#ifdef _WIN32
+LF_EXPORT int lf_decode_image_rgb(
+    const wchar_t* path,
+    uint8_t* out_rgb,
+    int expected_width,
+    int expected_height
+) {
+    if (!path || !out_rgb || expected_width <= 0 || expected_height <= 0) {
+        return 1;
+    }
+
+    HRESULT hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+    int should_uninit = 0;
+    if (SUCCEEDED(hr)) {
+        should_uninit = 1;
+    } else if (hr != RPC_E_CHANGED_MODE) {
+        return 2;
+    }
+
+    IWICImagingFactory* factory = NULL;
+    IWICBitmapDecoder* decoder = NULL;
+    IWICBitmapFrameDecode* frame = NULL;
+    IWICFormatConverter* converter = NULL;
+    int result = 0;
+
+    hr = CoCreateInstance(
+        &CLSID_WICImagingFactory,
+        NULL,
+        CLSCTX_INPROC_SERVER,
+        &IID_IWICImagingFactory,
+        (LPVOID*)&factory
+    );
+    if (FAILED(hr)) {
+        result = 3;
+        goto cleanup;
+    }
+
+    hr = factory->lpVtbl->CreateDecoderFromFilename(
+        factory,
+        path,
+        NULL,
+        GENERIC_READ,
+        WICDecodeMetadataCacheOnLoad,
+        &decoder
+    );
+    if (FAILED(hr)) {
+        result = 4;
+        goto cleanup;
+    }
+
+    hr = decoder->lpVtbl->GetFrame(decoder, 0, &frame);
+    if (FAILED(hr)) {
+        result = 5;
+        goto cleanup;
+    }
+
+    UINT width = 0;
+    UINT height = 0;
+    hr = frame->lpVtbl->GetSize(frame, &width, &height);
+    if (FAILED(hr)) {
+        result = 6;
+        goto cleanup;
+    }
+    if ((int)width != expected_width || (int)height != expected_height) {
+        result = 7;
+        goto cleanup;
+    }
+
+    hr = factory->lpVtbl->CreateFormatConverter(factory, &converter);
+    if (FAILED(hr)) {
+        result = 8;
+        goto cleanup;
+    }
+
+    hr = converter->lpVtbl->Initialize(
+        converter,
+        (IWICBitmapSource*)frame,
+        &GUID_WICPixelFormat24bppRGB,
+        WICBitmapDitherTypeNone,
+        NULL,
+        0.0,
+        WICBitmapPaletteTypeCustom
+    );
+    if (FAILED(hr)) {
+        result = 9;
+        goto cleanup;
+    }
+
+    hr = converter->lpVtbl->CopyPixels(
+        converter,
+        NULL,
+        (UINT)expected_width * 3U,
+        (UINT)expected_width * (UINT)expected_height * 3U,
+        out_rgb
+    );
+    if (FAILED(hr)) {
+        result = 10;
+        goto cleanup;
+    }
+
+cleanup:
+    if (converter) converter->lpVtbl->Release(converter);
+    if (frame) frame->lpVtbl->Release(frame);
+    if (decoder) decoder->lpVtbl->Release(decoder);
+    if (factory) factory->lpVtbl->Release(factory);
+    if (should_uninit) CoUninitialize();
+    return result;
+}
+#endif

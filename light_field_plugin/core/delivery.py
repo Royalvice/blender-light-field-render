@@ -30,7 +30,7 @@ LBY_LIKE_THRESHOLD = 178
 LBY_LIKE_BLACK_IS_ZERO = True
 LBY_LIKE_FIT_NOTE = (
     "whole-pixel PE interlace, reversed view order recommended by vendor pair, "
-    "single-threshold 1-bit output fitted from the 150 JPG -> TIFF sample"
+    "deterministic FM-like screen fitted from the 150 JPG -> TIFF sample"
 )
 
 
@@ -102,6 +102,14 @@ def _load_native_dll():
             ctypes.c_int,
         ]
         dll.lf_generate_lby_batch.restype = ctypes.c_int
+        if hasattr(dll, "lf_decode_image_rgb"):
+            dll.lf_decode_image_rgb.argtypes = [
+                ctypes.c_wchar_p,
+                ctypes.POINTER(ctypes.c_uint8),
+                ctypes.c_int,
+                ctypes.c_int,
+            ]
+            dll.lf_decode_image_rgb.restype = ctypes.c_int
         _NATIVE_DLL = dll
     except Exception:
         _NATIVE_DLL = None
@@ -367,6 +375,29 @@ def read_jpeg_info(path: str) -> Tuple[int, int]:
     raise DeliveryError(f"JPEG missing SOF segment: {path}")
 
 
+def read_jpeg_rgb(path: str) -> PngImage:
+    width, height = read_jpeg_info(path)
+    dll = _load_native_dll()
+    if dll is None or not hasattr(dll, "lf_decode_image_rgb"):
+        raise DeliveryError("Native JPEG decoder is not available")
+    buffer = (_ctypes_array_type(width * height * 3))()
+    result = dll.lf_decode_image_rgb(os.path.abspath(path), buffer, int(width), int(height))
+    if result != 0:
+        raise DeliveryError(f"Native JPEG decode failed with code {result}: {path}")
+    return PngImage(width, height, bytes(buffer))
+
+
+def _ctypes_array_type(length: int):
+    return ctypes.c_uint8 * int(length)
+
+
+def read_source_rgb(path: str) -> PngImage:
+    lower = path.lower()
+    if lower.endswith((".jpg", ".jpeg")):
+        return read_jpeg_rgb(path)
+    return read_png_rgb(path)
+
+
 def read_png_rgb(path: str) -> PngImage:
     with open(path, "rb") as f:
         data = f.read()
@@ -504,6 +535,11 @@ def numpy_available() -> bool:
 
 def native_available() -> bool:
     return _np is not None and _load_native_dll() is not None
+
+
+def native_jpeg_available() -> bool:
+    dll = _load_native_dll()
+    return dll is not None and hasattr(dll, "lf_decode_image_rgb")
 
 
 class RgbTiffWriter:
@@ -804,6 +840,16 @@ def _gamma_correct_luma(luma: float, gamma: float) -> float:
     return (max(0.0, min(255.0, luma)) / 255.0) ** inv_gamma
 
 
+def _hash_u32(value: int) -> int:
+    value &= 0xFFFFFFFF
+    value ^= value >> 16
+    value = (value * 0x7FEB352D) & 0xFFFFFFFF
+    value ^= value >> 15
+    value = (value * 0x846CA68B) & 0xFFFFFFFF
+    value ^= value >> 16
+    return value & 0xFFFFFFFF
+
+
 class StreamingHalftoner:
     def __init__(self, width: int, settings: HalftoneSettings, dpi: int):
         self.width = width
@@ -822,8 +868,8 @@ class StreamingHalftoner:
             raise ValueError("Halftone row length does not match image width")
         if self._method == "LBY":
             if _np is not None:
-                return self._process_lby_row_numpy(row)
-            return self._process_lby_row(row)
+                return self._process_lby_row_numpy(y, row)
+            return self._process_lby_row(y, row)
         if self._method == "AM":
             if _np is not None:
                 return self._process_am_row_numpy(y, row)
@@ -862,7 +908,7 @@ class StreamingHalftoner:
         self._next_errors = next_errors
         return black
 
-    def _process_lby_row(self, row: bytes) -> List[bool]:
+    def _process_lby_row(self, y: int, row: bytes) -> List[bool]:
         black = [False for _ in range(self.width)]
         for x in range(self.width):
             offset = x * 3
@@ -870,13 +916,27 @@ class StreamingHalftoner:
             g = row[offset + 1]
             b = row[offset + 2]
             luma = 0.2126 * r + 0.7152 * g + 0.0722 * b
-            black[x] = luma <= float(LBY_LIKE_THRESHOLD)
+            darkness = max(0.0, min(1.0, 1.0 - luma / 255.0))
+            darkness *= float(LBY_LIKE_THRESHOLD) / 178.0
+            darkness = max(0.0, min(1.0, darkness))
+            noise = (_hash_u32(x * 73856093 ^ int(y) * 19349663) & 0xFFFF) / 65536.0
+            black[x] = noise < darkness
         return black
 
-    def _process_lby_row_numpy(self, row: bytes):
+    def _process_lby_row_numpy(self, y: int, row: bytes):
         rgb = _np.frombuffer(row, dtype=_np.uint8).reshape(self.width, 3).astype(_np.float32)
         luma = 0.2126 * rgb[:, 0] + 0.7152 * rgb[:, 1] + 0.0722 * rgb[:, 2]
-        return luma <= float(LBY_LIKE_THRESHOLD)
+        darkness = (1.0 - _np.clip(luma / 255.0, 0.0, 1.0)) * (float(LBY_LIKE_THRESHOLD) / 178.0)
+        darkness = _np.clip(darkness, 0.0, 1.0)
+        x = _np.arange(self.width, dtype=_np.uint32)
+        hashes = x * _np.uint32(73856093) ^ _np.uint32(int(y) * 19349663)
+        hashes ^= hashes >> _np.uint32(16)
+        hashes *= _np.uint32(0x7FEB352D)
+        hashes ^= hashes >> _np.uint32(15)
+        hashes *= _np.uint32(0x846CA68B)
+        hashes ^= hashes >> _np.uint32(16)
+        noise = (hashes & _np.uint32(0xFFFF)).astype(_np.float32) / 65536.0
+        return noise < darkness
 
     def _process_am_row(self, y: int, row: bytes) -> List[bool]:
         shape = (self.settings.dot_shape or "ROUND").upper()
@@ -953,8 +1013,8 @@ class InterlaceRenderer:
         self.sources = []
         for index, path in enumerate(source_paths, start=1):
             _check_stop(stop_callback)
-            _emit_progress(progress_callback, "加载源视角 PNG", index, len(source_paths), os.path.basename(path))
-            self.sources.append(read_png_rgb(path))
+            _emit_progress(progress_callback, "加载源视角图", index, len(source_paths), os.path.basename(path))
+            self.sources.append(read_source_rgb(path))
         self.settings = settings
         self.width_px = width_px
         self.height_px = height_px
@@ -1573,8 +1633,8 @@ def build_manifest(settings: DeliverySettings, result: DeliveryResult, source_pa
     if (settings.halftone.method or "").upper() == "LBY":
         halftone.update(
             {
-                "algorithm": "LBY-like approximate threshold",
-                "threshold_luma_0_255": LBY_LIKE_THRESHOLD,
+                "algorithm": "LBY-like approximate FM screen",
+                "density_scale_reference": LBY_LIKE_THRESHOLD,
                 "photometric_interpretation": 1,
                 "black_is_zero": LBY_LIKE_BLACK_IS_ZERO,
                 "fit_note": LBY_LIKE_FIT_NOTE,
