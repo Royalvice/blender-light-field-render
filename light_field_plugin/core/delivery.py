@@ -28,9 +28,16 @@ PREVIEW_MAX_EDGE = 2048
 UINT32_MAX = 0xFFFFFFFF
 LBY_LIKE_THRESHOLD = 178
 LBY_LIKE_BLACK_IS_ZERO = True
+LBY_LIKE_AM_LPI = 65.0
+LBY_LIKE_AM_ANGLE_DEGREES = 75.0
+LBY_LIKE_AM_GAMMA = 2.0
+LBY_LIKE_AM_DENSITY_SCALE = 2.5
+LBY_LIKE_AM_PHASE_X = 20.512820512820515
+LBY_LIKE_AM_PHASE_Y = 41.02564102564103
+LBY_LIKE_AM_DOT_SHAPE = "DIAMOND"
 LBY_LIKE_FIT_NOTE = (
     "whole-pixel PE interlace, reversed view order recommended by vendor pair, "
-    "deterministic FM-like screen fitted from the 150 JPG -> TIFF sample"
+    "clustered-dot AM diamond screen fitted from the 150 JPG -> TIFF sample"
 )
 
 
@@ -909,6 +916,11 @@ class StreamingHalftoner:
         return black
 
     def _process_lby_row(self, y: int, row: bytes) -> List[bool]:
+        angle = math.radians(LBY_LIKE_AM_ANGLE_DEGREES)
+        cosv = math.cos(angle)
+        sinv = math.sin(angle)
+        cell = float(self.dpi) / LBY_LIKE_AM_LPI
+        density_scale = LBY_LIKE_AM_DENSITY_SCALE * (float(LBY_LIKE_THRESHOLD) / 178.0)
         black = [False for _ in range(self.width)]
         for x in range(self.width):
             offset = x * 3
@@ -916,27 +928,35 @@ class StreamingHalftoner:
             g = row[offset + 1]
             b = row[offset + 2]
             luma = 0.2126 * r + 0.7152 * g + 0.0722 * b
-            darkness = max(0.0, min(1.0, 1.0 - luma / 255.0))
-            darkness *= float(LBY_LIKE_THRESHOLD) / 178.0
+            luma_norm = (max(0.0, min(255.0, luma)) / 255.0) ** (1.0 / LBY_LIKE_AM_GAMMA)
+            darkness = (1.0 - luma_norm) * density_scale
             darkness = max(0.0, min(1.0, darkness))
-            noise = (_hash_u32(x * 73856093 ^ int(y) * 19349663) & 0xFFFF) / 65536.0
-            black[x] = noise < darkness
+            xr = float(x) * cosv + float(y) * sinv + LBY_LIKE_AM_PHASE_X
+            yr = -float(x) * sinv + float(y) * cosv + LBY_LIKE_AM_PHASE_Y
+            u = ((xr / cell) - math.floor(xr / cell)) * 2.0 - 1.0
+            v = ((yr / cell) - math.floor(yr / cell)) * 2.0 - 1.0
+            metric = (abs(u) + abs(v)) / 2.0
+            black[x] = metric <= darkness
         return black
 
     def _process_lby_row_numpy(self, y: int, row: bytes):
         rgb = _np.frombuffer(row, dtype=_np.uint8).reshape(self.width, 3).astype(_np.float32)
         luma = 0.2126 * rgb[:, 0] + 0.7152 * rgb[:, 1] + 0.0722 * rgb[:, 2]
-        darkness = (1.0 - _np.clip(luma / 255.0, 0.0, 1.0)) * (float(LBY_LIKE_THRESHOLD) / 178.0)
+        luma_norm = _np.power(_np.clip(luma / 255.0, 0.0, 1.0), 1.0 / LBY_LIKE_AM_GAMMA)
+        density_scale = LBY_LIKE_AM_DENSITY_SCALE * (float(LBY_LIKE_THRESHOLD) / 178.0)
+        darkness = (1.0 - luma_norm) * density_scale
         darkness = _np.clip(darkness, 0.0, 1.0)
-        x = _np.arange(self.width, dtype=_np.uint32)
-        hashes = x * _np.uint32(73856093) ^ _np.uint32(int(y) * 19349663)
-        hashes ^= hashes >> _np.uint32(16)
-        hashes *= _np.uint32(0x7FEB352D)
-        hashes ^= hashes >> _np.uint32(15)
-        hashes *= _np.uint32(0x846CA68B)
-        hashes ^= hashes >> _np.uint32(16)
-        noise = (hashes & _np.uint32(0xFFFF)).astype(_np.float32) / 65536.0
-        return noise < darkness
+        x = self._x_np
+        angle = math.radians(LBY_LIKE_AM_ANGLE_DEGREES)
+        cosv = math.cos(angle)
+        sinv = math.sin(angle)
+        cell = float(self.dpi) / LBY_LIKE_AM_LPI
+        xr = x * cosv + float(y) * sinv + LBY_LIKE_AM_PHASE_X
+        yr = -x * sinv + float(y) * cosv + LBY_LIKE_AM_PHASE_Y
+        u = ((xr / cell) - _np.floor(xr / cell)) * 2.0 - 1.0
+        v = ((yr / cell) - _np.floor(yr / cell)) * 2.0 - 1.0
+        metric = (_np.abs(u) + _np.abs(v)) / 2.0
+        return metric <= darkness
 
     def _process_am_row(self, y: int, row: bytes) -> List[bool]:
         shape = (self.settings.dot_shape or "ROUND").upper()
@@ -1633,8 +1653,15 @@ def build_manifest(settings: DeliverySettings, result: DeliveryResult, source_pa
     if (settings.halftone.method or "").upper() == "LBY":
         halftone.update(
             {
-                "algorithm": "LBY-like approximate FM screen",
+                "algorithm": "LBY-like approximate AM diamond screen",
                 "density_scale_reference": LBY_LIKE_THRESHOLD,
+                "screen_lpi": LBY_LIKE_AM_LPI,
+                "screen_angle_degrees": LBY_LIKE_AM_ANGLE_DEGREES,
+                "screen_gamma": LBY_LIKE_AM_GAMMA,
+                "screen_density_scale": LBY_LIKE_AM_DENSITY_SCALE,
+                "screen_phase_x": LBY_LIKE_AM_PHASE_X,
+                "screen_phase_y": LBY_LIKE_AM_PHASE_Y,
+                "screen_dot_shape": LBY_LIKE_AM_DOT_SHAPE,
                 "photometric_interpretation": 1,
                 "black_is_zero": LBY_LIKE_BLACK_IS_ZERO,
                 "fit_note": LBY_LIKE_FIT_NOTE,

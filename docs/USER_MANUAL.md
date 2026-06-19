@@ -7,7 +7,7 @@ This manual describes how to install and use the `Light Field Render` Blender ad
 Download the add-on ZIP from the GitHub Release page. The file should be named like:
 
 ```text
-light_field_render-v0.1.8.zip
+light_field_render-v0.1.17.zip
 ```
 
 Install it in Blender:
@@ -33,7 +33,7 @@ Important terms:
 - `焦距`: Blender camera lens focal length in millimeters.
 - `传感器宽度`: Blender camera sensor width in millimeters.
 - `输出分辨率`: output resolution for each rendered view.
-- `输出格式`: `PNG`, continuous `TIFF`, or halftoned `1-bit 菲林 TIFF`.
+- `输出格式`: `JPG`, `PNG`, continuous `TIFF`, or halftoned `1-bit 菲林 TIFF`.
 - `最终交付输出`: current-frame delivery workflow that uses physical size in mm plus PPI to generate final interlaced files.
 - `交付宽度` / `交付高度` / `PPI`: customer delivery size. Final pixels are calculated as `round(mm / 25.4 * PPI)`.
 
@@ -78,8 +78,8 @@ The add-on renders all cameras for the current frame. Output is grouped by frame
 ```text
 light_field_output/
   frame_0001/
-    camera_000.png
-    camera_001.png
+    camera_000.jpg
+    camera_001.jpg
     ...
 ```
 
@@ -98,40 +98,43 @@ The add-on renders the selected frame range for each camera. Output is grouped b
 ```text
 light_field_output/
   camera_000/
-    frame_0001.png
-    frame_0002.png
+    frame_0001.jpg
+    frame_0002.jpg
     ...
   camera_001/
-    frame_0001.png
-    frame_0002.png
+    frame_0001.jpg
+    frame_0002.jpg
     ...
 ```
 
 ## 7. Output Formats
 
-The add-on supports three output modes:
+The add-on supports these output modes:
 
+- `JPG`: standard continuous-tone JPEG image output, default for vendor handoff source views.
 - `PNG`: standard continuous-tone PNG image output.
 - `TIFF`: standard continuous-tone TIFF output written by Blender.
 - `1-bit 菲林 TIFF`: renders a temporary continuous PNG source, converts it to a black/white halftoned 1-bit TIFF, and deletes the temporary source unless `保留连续调源图` is enabled.
 
 For `1-bit 菲林 TIFF`, the output is a single-channel 1-bit TIFF intended for film/RIP workflows that need pure black/white dots instead of continuous tone. The TIFF writer stores `BitsPerSample=1`, `SamplesPerPixel=1`, `Compression=none`, and inch-based DPI metadata.
 
-Halftone controls:
+Legacy standalone film halftone controls remain available for render-format compatibility:
 
-- `AM / 聚集网点`: traditional clustered dots controlled by `DPI`, `LPI`, screen angle, and dot shape. This is the default for final delivery because large zero-degree interlace jobs can use the bundled native accelerator.
-- `FM / 误差扩散`: dispersed fixed-size dots. It can reduce visible moire in some lenticular/light-field workflows, but very large delivery jobs do not use the native fast path and can take much longer.
+- `AM / 聚集网点`: traditional clustered dots controlled by `DPI`, `LPI`, screen angle, and dot shape.
+- `FM / 误差扩散`: dispersed fixed-size dots.
 - `DPI`: output resolution metadata and AM cell-size basis.
 - `LPI`: AM screen ruling, used only in AM mode.
 - `网角`: AM screen angle in degrees.
 - `网点形状`: round, diamond, or ellipse in AM mode.
 - `Gamma`: luminance correction before halftoning.
 
+The final delivery panel exposes only `LBY-like近似` for the print TIFF workflow.
+
 ## 8. Final Delivery Output
 
 The `最终交付输出` panel is for the print/film deliverable. It is intentionally separate from Blender's source-view render resolution:
 
-- `输出分辨率 W/H` controls each `camera_###.png` source view rendered by Blender.
+- `输出分辨率 W/H` controls each `camera_###.jpg` or `camera_###.png` source view rendered by Blender.
 - `交付宽度 mm`, `交付高度 mm`, and `PPI` control the final interlaced delivery pixel size.
 
 For example, `210 mm x 297 mm @ 300 PPI` produces approximately `2480 x 3508` final pixels. Blender does not need to render every camera at that final size; the add-on resamples the source views during interlacing.
@@ -145,16 +148,16 @@ Workflow:
    - `Angle (°)`: interlace angle in degrees; the add-on converts it to radians internally.
    - `Offset`: original formula offset.
    - `反转视角顺序`: maps view 0 to `camera_N-1` when enabled.
-4. Configure the existing `1-bit 菲林 TIFF` halftone settings if film output is needed.
-5. Click `生成当前帧交付文件` for film delivery, or click `只生成连续调交织图` when you only need the continuous-tone interlaced TIFF and do not want halftoning.
+4. Use `生成当前帧交付文件` when you need the print TIFF; this writes `film_1bit.tif`.
+5. Use `只生成连续调交织图` when you only need the continuous-tone interlaced TIFF and do not want halftoning.
 
 The output folder is:
 
 ```text
 light_field_output/
   frame_0001/
-    camera_000.png
-    camera_001.png
+    camera_000.jpg
+    camera_001.jpg
     ...
   delivery/
     frame_0001/
@@ -168,19 +171,19 @@ Files:
 
 - `interlaced.tif`: optional full-size continuous-tone 8-bit RGB TIFF, uncompressed, with PPI written as TIFF DPI metadata. If the RGB image exceeds classic TIFF limits, this file is written as BigTIFF automatically. Enable `输出连续调 interlaced.tif` only when the factory or debugging workflow needs the continuous-tone interlaced image.
 - `interlaced_preview.png`: quick preview PNG with max edge 2048px.
-- `film_1bit.tif`: full-size single-channel 1-bit black/white TIFF using the selected FM/AM halftone settings.
+- `film_1bit.tif`: full-size single-channel 1-bit black/white TIFF using the `LBY-like近似` delivery halftone.
 - `delivery_manifest.json`: records plugin version, frame, mm/PPI/pixel size, source resolution, camera count, interlace parameters, halftone parameters, warnings, file names, and elapsed time.
 
 `只生成连续调交织图` writes only `interlaced.tif`, `interlaced_preview.png`, and `delivery_manifest.json`; it removes stale `film_1bit.tif` from that frame folder so the output set is unambiguous.
 
 Safety behavior:
 
-- If source view PNGs already exist and match the current camera count and source resolution, they are reused.
-- If source view PNGs are missing, they are rendered before interlacing.
+- If source view images already exist and match the current camera count, source format, and source resolution, they are reused.
+- If source view images are missing, they are rendered before interlacing.
 - If camera or output settings are dirty, the add-on applies them and rerenders source views.
 - If the final output exceeds 100 megapixels, `确认生成大图` must be checked.
 - Very large deliverables can still take a long time if `输出连续调 interlaced.tif` is enabled. `194 x 345 mm @ 4000 PPI` is about `30551 x 54331` pixels, roughly 5 GB for the continuous RGB TIFF alone, so the add-on uses BigTIFF and reports row progress while writing.
-- Release ZIPs bundle Blender-compatible NumPy and the Windows native accelerator by default. If both are available, AM delivery with zero-degree interlace uses the native path for high-resolution film output. The native accelerator uses Windows system threads and does not require Visual Studio, OpenMP, or `VCOMP140.DLL` on the user machine.
+- Release ZIPs bundle Blender-compatible NumPy and the Windows native accelerator by default. If both are available, zero-degree LBY-like delivery uses the native path for high-resolution film output. The native accelerator uses Windows system threads and does not require Visual Studio, OpenMP, or `VCOMP140.DLL` on the user machine.
 - If the final output is more than 2x larger than the source-view resolution on either axis, the panel warns that clarity may be insufficient.
 - Failed or stopped generation removes temporary `.tmp` files and writes `delivery_error.log`.
 
@@ -194,7 +197,7 @@ Safety behavior:
 6. Increase camera count and resolution.
 7. Generate the final current-frame delivery files.
 
-## 10. v0.1.16 Factory Delivery Workflow
+## 10. v0.1.17 Factory Delivery Workflow
 
 Use this workflow when matching the current vendor handoff:
 
@@ -212,7 +215,8 @@ Current delivery rules:
 - PE is interpreted as a physical line count: the output period in pixels is `PPI / PE`.
 - The only exposed print algorithm is `LBY-like近似`.
 - `film_1bit.tif` is uncompressed 1-bit TIFF with `PhotometricInterpretation=1`, meaning decoded pixels are `0=black` and `1=white`.
-- `LBY-like近似` currently uses a deterministic FM-like dot screen, also recorded in `delivery_manifest.json`. This fixes the previous single-threshold output that looked like a mostly white image with a few black lines. The available factory pair supports the PE period and reversed view-order direction, but does not prove the exact RIP algorithm; use future input/output pairs to refine or replace the approximation.
+- `LBY-like近似` currently uses a deterministic AM diamond clustered-dot screen fitted from the available 150 JPG -> 1-bit TIFF factory pair. It fixes the previous mostly-white output and is closer to a real RIP-style dot screen, but it is still an approximation and not a bitwise clone of the factory algorithm.
+- The fitted screen parameters are recorded in `delivery_manifest.json`: `65 LPI`, `75°`, `gamma=2.0`, `density_scale=2.5`, phase X `20.512820512820515`, phase Y `41.02564102564103`, dot shape `DIAMOND`.
 
 ## 11. Troubleshooting
 
@@ -257,18 +261,3 @@ If final delivery looks soft:
 
 - Increase the normal `输出分辨率 W/H` for source views.
 - The final delivery stage can resample source views to a larger size, but it cannot create detail that was not rendered by Blender.
-
-## 12. Notes For Release Builds
-
-The Blender add-on ZIP must contain the add-on package folder at the ZIP root:
-
-```text
-light_field_plugin/
-  __init__.py
-  core/
-  operators/
-  panels/
-  properties/
-```
-
-Use `scripts/build_release.ps1` to create this layout automatically.

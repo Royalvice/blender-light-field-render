@@ -62,6 +62,10 @@ static inline uint8_t clamp_round_u8(float value) {
 
 static void lf_process_rows(const LfBatchJob* job) {
     const int64_t source_plane = (int64_t)job->source_width * (int64_t)job->source_height * 3;
+    const double lby_cos = 0.25881904510252074; /* cos(75 degrees) */
+    const double lby_sin = 0.96592582628906831; /* sin(75 degrees) */
+    const double lby_inv_cell_size = 65.0 / 4000.0;
+    const double lby_density_scale = 2.5 * ((double)job->lby_threshold / 178.0);
 
     for (int row = job->row_begin; row < job->row_end; ++row) {
         const int final_y = job->y_start + row;
@@ -114,16 +118,17 @@ static void lf_process_rows(const LfBatchJob* job) {
                     double luma_norm = luma / 255.0;
                     if (luma_norm < 0.0) luma_norm = 0.0;
                     if (luma_norm > 1.0) luma_norm = 1.0;
-                    double darkness = 1.0 - luma_norm;
-                    if (job->use_gamma) {
-                        darkness = pow(darkness, job->inv_gamma);
-                    }
-                    darkness *= (double)job->lby_threshold / 178.0;
+                    double darkness = (1.0 - sqrt(luma_norm)) * lby_density_scale;
                     if (darkness < 0.0) darkness = 0.0;
                     if (darkness > 1.0) darkness = 1.0;
-                    const uint32_t h = lf_hash_u32((uint32_t)x * 73856093U ^ (uint32_t)final_y * 19349663U);
-                    const double threshold = (double)(h & 0xFFFFU) / 65536.0;
-                    if (threshold < darkness) {
+                    const double xr = (double)x * lby_cos + (double)final_y * lby_sin + 20.512820512820515;
+                    const double yr = -(double)x * lby_sin + (double)final_y * lby_cos + 41.02564102564103;
+                    const double fx = xr * lby_inv_cell_size;
+                    const double fy = yr * lby_inv_cell_size;
+                    const double u = (fx - floor(fx)) * 2.0 - 1.0;
+                    const double v = (fy - floor(fy)) * 2.0 - 1.0;
+                    const double metric = (fabs(u) + fabs(v)) / 2.0;
+                    if (metric <= darkness) {
                         bit_row[x >> 3] &= (uint8_t)~(0x80 >> (x & 7));
                     }
                     continue;

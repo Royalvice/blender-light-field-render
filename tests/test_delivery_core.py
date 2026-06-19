@@ -125,14 +125,16 @@ class DeliveryCoreTests(unittest.TestCase):
 
     def test_lby_halftoner_outputs_deterministic_dot_screen(self):
         halftoner = self.delivery.StreamingHalftoner(
-            16,
+            96,
             self.delivery.HalftoneSettings(method="LBY", gamma=1.0),
             4000,
         )
-        row = bytes([128, 128, 128] * 16)
+        row = bytes([160, 160, 160] * 96)
         result = halftoner.process_rgb_row(0, row)
+        repeat = halftoner.process_rgb_row(0, row)
+        self.assertEqual(list(result), list(repeat))
         self.assertGreater(sum(bool(value) for value in result), 0)
-        self.assertLess(sum(bool(value) for value in result), 16)
+        self.assertLess(sum(bool(value) for value in result), 96)
 
         extremes_halftoner = self.delivery.StreamingHalftoner(
             2,
