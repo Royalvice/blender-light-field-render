@@ -359,6 +359,13 @@ class LightFieldProperties(PropertyGroup):
         default=False,
     )
 
+    delivery_calibration_target_tiff: StringProperty(
+        name="校准目标 TIFF",
+        description="可选：厂商返回的 1-bit TIFF；从 interlaced.tif 单独挂网后会生成逐像素校准报告",
+        default="",
+        subtype="FILE_PATH",
+    )
+
     interlace_pe: FloatProperty(
         name="PE",
         description="交织公式原始 PE 参数，沿用现有 interlace_taichi.py 口径",

@@ -22,6 +22,7 @@ from ..core.delivery import (
     InterlaceSettings,
     calculate_delivery_pixels,
     generate_delivery_outputs,
+    halftone_interlaced_tiff,
     is_large_output,
     make_delivery_paths,
     native_jpeg_available,
@@ -575,6 +576,214 @@ class LIGHTFIELD_OT_generate_interlaced(_DeliveryRunnerMixin, Operator):
             write_interlaced_tiff=True,
             write_film_tiff=False,
         )
+
+
+class LIGHTFIELD_OT_halftone_interlaced(Operator):
+    bl_idname = "lightfield.halftone_interlaced"
+    bl_label = "从交织图生成菲林 TIFF"
+    bl_description = "读取当前交付目录的 interlaced.tif，使用固定挂网 Profile 生成 film_1bit.tif 和校准报告"
+    bl_options = {"REGISTER"}
+
+    def _init_common(self, context):
+        self.scene = context.scene
+        self.props = context.scene.light_field_props
+        self.output_root = bpy.path.abspath(self.props.output_path)
+        self.paths = make_delivery_paths(self.output_root, self.scene.frame_current)
+        self.current_stage = "准备交织图挂网"
+        self.start_time = time.perf_counter()
+        self.wm = context.window_manager
+        self.wm_progress_active = False
+        self._stop_event = threading.Event()
+        self._worker = None
+        self._worker_error = None
+        self._worker_result = None
+        self._worker_progress = None
+        self._worker_lock = threading.Lock()
+
+    def _target_tiff(self) -> str | None:
+        raw_target = self.props.delivery_calibration_target_tiff.strip()
+        if not raw_target:
+            return None
+        target = bpy.path.abspath(raw_target)
+        return target if target else None
+
+    def _progress(self, stage: str, current: int, total: int, info: str = "") -> None:
+        self.current_stage = stage
+        props = self.props
+        props.delivery_stage = stage
+        props.delivery_progress = int(current)
+        props.delivery_progress_total = max(1, int(total))
+        props.delivery_info = info
+        props.delivery_elapsed_time = time.perf_counter() - self.start_time
+        if not self.wm_progress_active:
+            self.wm.progress_begin(0, 1000)
+            self.wm_progress_active = True
+        percent = 0.0 if total <= 0 else max(0.0, min(1.0, float(current) / float(total)))
+        self.wm.progress_update(int(percent * 1000))
+        _safe_redraw()
+
+    def _begin_props(self) -> None:
+        props = self.props
+        props.is_delivery_generating = True
+        props.delivery_stop_requested = False
+        props.delivery_progress = 0
+        props.delivery_progress_total = 1
+        props.delivery_stage = "准备交织图挂网"
+        props.delivery_info = ""
+        props.delivery_last_output_dir = ""
+        props.delivery_elapsed_time = 0.0
+
+    def _validate(self) -> None:
+        if not self.output_root:
+            raise DeliveryError("请先设置输出路径")
+        if not os.path.exists(self.paths.interlaced_tiff):
+            raise DeliveryError(f"缺少连续调交织图: {self.paths.interlaced_tiff}")
+        target = self._target_tiff()
+        if target and not os.path.exists(target):
+            raise DeliveryError(f"校准目标 TIFF 不存在: {target}")
+        if self.props.delivery_ppi <= 0:
+            raise DeliveryError("PPI 必须大于 0")
+
+    def _run_halftone(self, progress_callback):
+        report_path = os.path.join(self.paths.output_dir, "halftone_calibration_report.json")
+        return halftone_interlaced_tiff(
+            self.paths.interlaced_tiff,
+            self.paths.film_1bit_tiff,
+            ppi=self.props.delivery_ppi,
+            target_tiff=self._target_tiff(),
+            calibration_report_json=report_path,
+            progress_callback=progress_callback,
+            stop_callback=self._stop_event.is_set,
+        )
+
+    def _finish_success(self, report: dict):
+        self.props.delivery_last_output_dir = self.paths.output_dir
+        self.props.delivery_elapsed_time = report.get("elapsed_seconds", 0.0)
+        comparison = report.get("comparison")
+        if comparison and comparison.get("same_shape"):
+            self.props.delivery_info = f"mismatch {comparison['mismatch_ratio'] * 100:.4f}%"
+        else:
+            self.props.delivery_info = "已生成 film_1bit.tif"
+        self.report(
+            {"INFO"},
+            (
+                f"挂网完成: {self.paths.film_1bit_tiff} | "
+                f"用时 {format_time(self.props.delivery_elapsed_time)}"
+            ),
+        )
+
+    def _cleanup(self, context, *, reset_stop: bool = True):
+        global _ACTIVE_DELIVERY_OPERATOR
+        if hasattr(self, "_timer") and self._timer is not None:
+            context.window_manager.event_timer_remove(self._timer)
+            self._timer = None
+        if _ACTIVE_DELIVERY_OPERATOR is self:
+            _ACTIVE_DELIVERY_OPERATOR = None
+        if self.wm_progress_active:
+            self.wm.progress_end()
+            self.wm_progress_active = False
+        self.props.is_delivery_generating = False
+        if reset_stop:
+            self.props.delivery_stop_requested = False
+        self.props.delivery_elapsed_time = time.perf_counter() - self.start_time
+
+    def _request_stop(self):
+        self.props.delivery_stop_requested = True
+        self.props.delivery_stage = "正在停止交付生成"
+        self.props.delivery_info = "正在等待挂网线程安全退出并清理临时文件"
+        self._stop_event.set()
+
+    def execute(self, context):
+        if bpy.app.background or context.window is None:
+            return self._execute_blocking(context)
+        return self._execute_modal(context)
+
+    def _execute_blocking(self, context):
+        props = context.scene.light_field_props
+        if props.is_rendering:
+            self.report({"WARNING"}, "已有渲染任务正在运行")
+            return {"CANCELLED"}
+        if props.is_delivery_generating:
+            self.report({"WARNING"}, "已有交付生成任务正在运行")
+            return {"CANCELLED"}
+        self._init_common(context)
+        try:
+            self._validate()
+            self._begin_props()
+            report = self._run_halftone(self._progress)
+            self._finish_success(report)
+            return {"FINISHED"}
+        except DeliveryCancelled as exc:
+            write_error_log(self.paths.error_log, self.current_stage, exc, None)
+            self.report({"WARNING"}, "已停止交付生成")
+            return {"CANCELLED"}
+        except Exception as exc:
+            write_error_log(self.paths.error_log, self.current_stage, exc, None)
+            self.report({"ERROR"}, f"挂网失败: {exc}")
+            return {"CANCELLED"}
+        finally:
+            self._cleanup(context)
+
+    def _execute_modal(self, context):
+        global _ACTIVE_DELIVERY_OPERATOR
+        props = context.scene.light_field_props
+        if props.is_rendering:
+            self.report({"WARNING"}, "已有渲染任务正在运行")
+            return {"CANCELLED"}
+        if props.is_delivery_generating:
+            self.report({"WARNING"}, "已有交付生成任务正在运行")
+            return {"CANCELLED"}
+        self._init_common(context)
+        try:
+            self._validate()
+            self._begin_props()
+        except Exception as exc:
+            write_error_log(self.paths.error_log, self.current_stage, exc, None)
+            self.report({"ERROR"}, f"挂网失败: {exc}")
+            self._cleanup(context)
+            return {"CANCELLED"}
+
+        def progress(stage: str, current: int, total: int, info: str = "") -> None:
+            with self._worker_lock:
+                self._worker_progress = (stage, int(current), max(1, int(total)), info)
+
+        def worker():
+            try:
+                self._worker_result = self._run_halftone(progress)
+            except Exception as exc:
+                self._worker_error = exc
+
+        self._timer = context.window_manager.event_timer_add(0.1, window=context.window)
+        self._worker = threading.Thread(target=worker, name="LightFieldHalftoneWorker", daemon=True)
+        self._worker.start()
+        context.window_manager.modal_handler_add(self)
+        _ACTIVE_DELIVERY_OPERATOR = self
+        return {"RUNNING_MODAL"}
+
+    def modal(self, context, event):
+        if event.type != "TIMER":
+            return {"RUNNING_MODAL"}
+        if self.props.delivery_stop_requested:
+            self._request_stop()
+        with self._worker_lock:
+            progress = self._worker_progress
+            self._worker_progress = None
+        if progress is not None:
+            self._progress(*progress)
+        if self._worker.is_alive():
+            return {"RUNNING_MODAL"}
+        if self._worker_error is not None:
+            if isinstance(self._worker_error, DeliveryCancelled):
+                write_error_log(self.paths.error_log, self.current_stage, self._worker_error, None)
+                self.report({"WARNING"}, "已停止交付生成")
+            else:
+                write_error_log(self.paths.error_log, self.current_stage, self._worker_error, None)
+                self.report({"ERROR"}, f"挂网失败: {self._worker_error}")
+            self._cleanup(context)
+            return {"CANCELLED"}
+        self._finish_success(self._worker_result)
+        self._cleanup(context)
+        return {"FINISHED"}
 
 
 class LIGHTFIELD_OT_stop_delivery(Operator):

@@ -18,7 +18,7 @@ import zlib
 from contextlib import ExitStack
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from typing import Callable, Iterable, List, Optional, Sequence, Tuple
+from typing import BinaryIO, Callable, Iterable, List, Optional, Sequence, Tuple
 
 
 MM_PER_INCH = 25.4
@@ -131,6 +131,61 @@ class DeliveryCancelled(DeliveryError):
     """Raised when the user requests delivery generation to stop."""
 
 
+@dataclass(frozen=True)
+class HalftoneProfile:
+    name: str
+    algorithm: str
+    family: str
+    lpi: float
+    angle_degrees: float
+    gamma: float
+    density_scale: float
+    phase_x: float
+    phase_y: float
+    dot_shape: str
+    density_scale_reference: int
+    photometric_interpretation: int
+    black_is_zero: bool
+    fit_note: str
+
+
+LBY_LIKE_PROFILE = HalftoneProfile(
+    name="LBY_approx_am_diamond_v1",
+    algorithm="LBY-like approximate AM diamond screen",
+    family="AM_CLUSTERED",
+    lpi=LBY_LIKE_AM_LPI,
+    angle_degrees=LBY_LIKE_AM_ANGLE_DEGREES,
+    gamma=LBY_LIKE_AM_GAMMA,
+    density_scale=LBY_LIKE_AM_DENSITY_SCALE,
+    phase_x=LBY_LIKE_AM_PHASE_X,
+    phase_y=LBY_LIKE_AM_PHASE_Y,
+    dot_shape=LBY_LIKE_AM_DOT_SHAPE,
+    density_scale_reference=LBY_LIKE_THRESHOLD,
+    photometric_interpretation=1,
+    black_is_zero=LBY_LIKE_BLACK_IS_ZERO,
+    fit_note=LBY_LIKE_FIT_NOTE,
+)
+
+
+def halftone_profile_to_manifest(profile: HalftoneProfile) -> dict:
+    return {
+        "profile_name": profile.name,
+        "algorithm": profile.algorithm,
+        "family": profile.family,
+        "density_scale_reference": profile.density_scale_reference,
+        "screen_lpi": profile.lpi,
+        "screen_angle_degrees": profile.angle_degrees,
+        "screen_gamma": profile.gamma,
+        "screen_density_scale": profile.density_scale,
+        "screen_phase_x": profile.phase_x,
+        "screen_phase_y": profile.phase_y,
+        "screen_dot_shape": profile.dot_shape,
+        "photometric_interpretation": profile.photometric_interpretation,
+        "black_is_zero": profile.black_is_zero,
+        "fit_note": profile.fit_note,
+    }
+
+
 @dataclass
 class InterlaceSettings:
     pe: float = 16.7240
@@ -188,6 +243,25 @@ class DeliveryResult:
     paths: DeliveryPaths
     large_output_warning: bool
     source_upscale_warning: bool
+
+
+@dataclass(frozen=True)
+class TiffImageInfo:
+    path: str
+    width: int
+    height: int
+    bits_per_sample: Tuple[int, ...]
+    samples_per_pixel: int
+    compression: int
+    photometric_interpretation: int
+    rows_per_strip: int
+    strip_offset: int
+    strip_byte_count: int
+    dpi_x: Optional[float]
+    dpi_y: Optional[float]
+    is_bigtiff: bool
+    image_offset: int
+    row_bytes: int
 
 
 ProgressCallback = Callable[[str, int, int, str], None]
@@ -403,6 +477,155 @@ def read_source_rgb(path: str) -> PngImage:
     if lower.endswith((".jpg", ".jpeg")):
         return read_jpeg_rgb(path)
     return read_png_rgb(path)
+
+
+def _read_exact(file: BinaryIO, size: int) -> bytes:
+    data = file.read(size)
+    if len(data) != size:
+        raise DeliveryError("TIFF data is truncated")
+    return data
+
+
+def _parse_tiff_ifd(path: str) -> tuple[bool, dict[int, tuple[int, int, int]], bytes]:
+    with open(path, "rb") as f:
+        header = _read_exact(f, 16)
+        if header[:2] != b"II":
+            raise DeliveryError(f"Only little-endian TIFF is supported: {path}")
+        magic = struct.unpack_from("<H", header, 2)[0]
+        if magic == 42:
+            ifd_offset = struct.unpack_from("<I", header, 4)[0]
+            f.seek(ifd_offset)
+            count = struct.unpack("<H", _read_exact(f, 2))[0]
+            entries = {}
+            for _ in range(count):
+                tag, field_type, value_count, value = struct.unpack("<HHII", _read_exact(f, 12))
+                entries[tag] = (field_type, value_count, value)
+            return False, entries, header
+        if magic == 43:
+            bytesize, zero = struct.unpack_from("<HH", header, 4)
+            if bytesize != 8 or zero != 0:
+                raise DeliveryError(f"Unsupported BigTIFF header: {path}")
+            ifd_offset = struct.unpack_from("<Q", header, 8)[0]
+            f.seek(ifd_offset)
+            count = struct.unpack("<Q", _read_exact(f, 8))[0]
+            entries = {}
+            for _ in range(count):
+                tag, field_type, value_count, value = struct.unpack("<HHQQ", _read_exact(f, 20))
+                entries[tag] = (field_type, int(value_count), int(value))
+            return True, entries, header
+    raise DeliveryError(f"Unsupported TIFF magic {magic}: {path}")
+
+
+def _tag_required(tags: dict[int, tuple[int, int, int]], tag: int, path: str) -> tuple[int, int, int]:
+    if tag not in tags:
+        raise DeliveryError(f"TIFF missing required tag {tag}: {path}")
+    return tags[tag]
+
+
+def _tiff_short_values(path: str, tags: dict[int, tuple[int, int, int]], tag: int) -> Tuple[int, ...]:
+    field_type, count, value = _tag_required(tags, tag, path)
+    if field_type != 3:
+        raise DeliveryError(f"TIFF tag {tag} must be SHORT: {path}")
+    if count == 1:
+        return (value & 0xFFFF,)
+    byte_count = count * 2
+    with open(path, "rb") as f:
+        f.seek(value)
+        return struct.unpack("<" + "H" * count, _read_exact(f, byte_count))
+
+
+def _tiff_single_int(path: str, tags: dict[int, tuple[int, int, int]], tag: int) -> int:
+    field_type, count, value = _tag_required(tags, tag, path)
+    if count != 1:
+        raise DeliveryError(f"TIFF tag {tag} must contain one value: {path}")
+    if field_type == 3:
+        return value & 0xFFFF
+    if field_type in {4, 16}:
+        return int(value)
+    raise DeliveryError(f"Unsupported TIFF integer tag type {field_type} for tag {tag}: {path}")
+
+
+def _tiff_rational(path: str, tags: dict[int, tuple[int, int, int]], tag: int) -> Optional[float]:
+    entry = tags.get(tag)
+    if entry is None:
+        return None
+    field_type, count, value = entry
+    if field_type != 5 or count != 1:
+        return None
+    with open(path, "rb") as f:
+        f.seek(value)
+        numerator, denominator = struct.unpack("<II", _read_exact(f, 8))
+    if denominator == 0:
+        return None
+    return float(numerator) / float(denominator)
+
+
+def read_tiff_image_info(path: str) -> TiffImageInfo:
+    is_bigtiff, tags, _header = _parse_tiff_ifd(path)
+    width = _tiff_single_int(path, tags, 256)
+    height = _tiff_single_int(path, tags, 257)
+    bits_per_sample = _tiff_short_values(path, tags, 258)
+    compression = _tiff_single_int(path, tags, 259)
+    photometric = _tiff_single_int(path, tags, 262)
+    strip_offset = _tiff_single_int(path, tags, 273)
+    samples_per_pixel = _tiff_single_int(path, tags, 277)
+    rows_per_strip = _tiff_single_int(path, tags, 278) if 278 in tags else height
+    strip_byte_count = _tiff_single_int(path, tags, 279)
+    if compression != 1:
+        raise DeliveryError(f"Only uncompressed TIFF is supported: {path}")
+    if rows_per_strip != height:
+        raise DeliveryError(f"Only one-strip TIFF is supported: {path}")
+    if samples_per_pixel == 3 and bits_per_sample == (8, 8, 8):
+        row_bytes = width * 3
+    elif samples_per_pixel == 1 and bits_per_sample == (1,):
+        row_bytes = (width + 7) // 8
+    else:
+        raise DeliveryError(f"Unsupported TIFF pixel layout: {path}")
+    expected_bytes = row_bytes * height
+    if strip_byte_count != expected_bytes:
+        raise DeliveryError(f"TIFF byte count does not match dimensions: {path}")
+    return TiffImageInfo(
+        path=path,
+        width=width,
+        height=height,
+        bits_per_sample=bits_per_sample,
+        samples_per_pixel=samples_per_pixel,
+        compression=compression,
+        photometric_interpretation=photometric,
+        rows_per_strip=rows_per_strip,
+        strip_offset=strip_offset,
+        strip_byte_count=strip_byte_count,
+        dpi_x=_tiff_rational(path, tags, 282),
+        dpi_y=_tiff_rational(path, tags, 283),
+        is_bigtiff=is_bigtiff,
+        image_offset=strip_offset,
+        row_bytes=row_bytes,
+    )
+
+
+def read_uncompressed_rgb_tiff_info(path: str) -> TiffImageInfo:
+    info = read_tiff_image_info(path)
+    if info.samples_per_pixel != 3 or info.bits_per_sample != (8, 8, 8):
+        raise DeliveryError(f"Expected uncompressed 8-bit RGB TIFF: {path}")
+    if info.photometric_interpretation != 2:
+        raise DeliveryError(f"Expected RGB TIFF PhotometricInterpretation=2: {path}")
+    return info
+
+
+def read_uncompressed_one_bit_tiff_info(path: str) -> TiffImageInfo:
+    info = read_tiff_image_info(path)
+    if info.samples_per_pixel != 1 or info.bits_per_sample != (1,):
+        raise DeliveryError(f"Expected uncompressed 1-bit TIFF: {path}")
+    if info.photometric_interpretation != 1:
+        raise DeliveryError(f"Expected BlackIsZero-compatible TIFF PhotometricInterpretation=1: {path}")
+    return info
+
+
+def iter_tiff_rows(info: TiffImageInfo) -> Iterable[bytes]:
+    with open(info.path, "rb") as f:
+        f.seek(info.image_offset)
+        for _y in range(info.height):
+            yield _read_exact(f, info.row_bytes)
 
 
 def read_png_rgb(path: str) -> PngImage:
@@ -858,17 +1081,24 @@ def _hash_u32(value: int) -> int:
 
 
 class StreamingHalftoner:
-    def __init__(self, width: int, settings: HalftoneSettings, dpi: int):
+    def __init__(
+        self,
+        width: int,
+        settings: HalftoneSettings,
+        dpi: int,
+        profile: HalftoneProfile = LBY_LIKE_PROFILE,
+    ):
         self.width = width
         self.settings = settings
         self.dpi = int(dpi)
+        self.profile = profile
         self._next_errors = [0.0 for _ in range(width)]
         self._method = (settings.method or "FM").upper()
         self._angle = math.radians(settings.angle_degrees)
         self._cos = math.cos(self._angle)
         self._sin = math.sin(self._angle)
         self._cell = max(2.0, float(self.dpi) / max(1.0, float(settings.lpi)))
-        self._x_np = _np.arange(width, dtype=_np.float32) if _np is not None else None
+        self._x_np = _np.arange(width, dtype=_np.float64) if _np is not None else None
 
     def process_rgb_row(self, y: int, row: bytes) -> List[bool]:
         if len(row) != self.width * 3:
@@ -916,11 +1146,12 @@ class StreamingHalftoner:
         return black
 
     def _process_lby_row(self, y: int, row: bytes) -> List[bool]:
-        angle = math.radians(LBY_LIKE_AM_ANGLE_DEGREES)
+        profile = self.profile
+        angle = math.radians(profile.angle_degrees)
         cosv = math.cos(angle)
         sinv = math.sin(angle)
-        cell = float(self.dpi) / LBY_LIKE_AM_LPI
-        density_scale = LBY_LIKE_AM_DENSITY_SCALE * (float(LBY_LIKE_THRESHOLD) / 178.0)
+        cell = float(self.dpi) / profile.lpi
+        density_scale = profile.density_scale * (float(profile.density_scale_reference) / 178.0)
         black = [False for _ in range(self.width)]
         for x in range(self.width):
             offset = x * 3
@@ -928,11 +1159,11 @@ class StreamingHalftoner:
             g = row[offset + 1]
             b = row[offset + 2]
             luma = 0.2126 * r + 0.7152 * g + 0.0722 * b
-            luma_norm = (max(0.0, min(255.0, luma)) / 255.0) ** (1.0 / LBY_LIKE_AM_GAMMA)
+            luma_norm = (max(0.0, min(255.0, luma)) / 255.0) ** (1.0 / profile.gamma)
             darkness = (1.0 - luma_norm) * density_scale
             darkness = max(0.0, min(1.0, darkness))
-            xr = float(x) * cosv + float(y) * sinv + LBY_LIKE_AM_PHASE_X
-            yr = -float(x) * sinv + float(y) * cosv + LBY_LIKE_AM_PHASE_Y
+            xr = float(x) * cosv + float(y) * sinv + profile.phase_x
+            yr = -float(x) * sinv + float(y) * cosv + profile.phase_y
             u = ((xr / cell) - math.floor(xr / cell)) * 2.0 - 1.0
             v = ((yr / cell) - math.floor(yr / cell)) * 2.0 - 1.0
             metric = (abs(u) + abs(v)) / 2.0
@@ -940,19 +1171,20 @@ class StreamingHalftoner:
         return black
 
     def _process_lby_row_numpy(self, y: int, row: bytes):
-        rgb = _np.frombuffer(row, dtype=_np.uint8).reshape(self.width, 3).astype(_np.float32)
+        profile = self.profile
+        rgb = _np.frombuffer(row, dtype=_np.uint8).reshape(self.width, 3).astype(_np.float64)
         luma = 0.2126 * rgb[:, 0] + 0.7152 * rgb[:, 1] + 0.0722 * rgb[:, 2]
-        luma_norm = _np.power(_np.clip(luma / 255.0, 0.0, 1.0), 1.0 / LBY_LIKE_AM_GAMMA)
-        density_scale = LBY_LIKE_AM_DENSITY_SCALE * (float(LBY_LIKE_THRESHOLD) / 178.0)
+        luma_norm = _np.power(_np.clip(luma / 255.0, 0.0, 1.0), 1.0 / profile.gamma)
+        density_scale = profile.density_scale * (float(profile.density_scale_reference) / 178.0)
         darkness = (1.0 - luma_norm) * density_scale
         darkness = _np.clip(darkness, 0.0, 1.0)
         x = self._x_np
-        angle = math.radians(LBY_LIKE_AM_ANGLE_DEGREES)
+        angle = math.radians(profile.angle_degrees)
         cosv = math.cos(angle)
         sinv = math.sin(angle)
-        cell = float(self.dpi) / LBY_LIKE_AM_LPI
-        xr = x * cosv + float(y) * sinv + LBY_LIKE_AM_PHASE_X
-        yr = -x * sinv + float(y) * cosv + LBY_LIKE_AM_PHASE_Y
+        cell = float(self.dpi) / profile.lpi
+        xr = x * cosv + float(y) * sinv + profile.phase_x
+        yr = -x * sinv + float(y) * cosv + profile.phase_y
         u = ((xr / cell) - _np.floor(xr / cell)) * 2.0 - 1.0
         v = ((yr / cell) - _np.floor(yr / cell)) * 2.0 - 1.0
         metric = (_np.abs(u) + _np.abs(v)) / 2.0
@@ -1640,6 +1872,176 @@ def generate_delivery_outputs(
         raise
 
 
+def _valid_bits_mask(width: int) -> int:
+    remainder = width % 8
+    if remainder == 0:
+        return 0xFF
+    return (0xFF << (8 - remainder)) & 0xFF
+
+
+def _count_black_in_packed_row(row: bytes, width: int) -> int:
+    if not row:
+        return 0
+    if width % 8 == 0:
+        white = sum(byte.bit_count() for byte in row)
+        return width - white
+    valid_mask = _valid_bits_mask(width)
+    white = sum(byte.bit_count() for byte in row[:-1])
+    white += (row[-1] & valid_mask).bit_count()
+    return width - white
+
+
+def _count_mismatch_in_packed_rows(left: bytes, right: bytes, width: int) -> int:
+    if len(left) != len(right):
+        raise DeliveryError("1-bit TIFF row byte lengths do not match")
+    if not left:
+        return 0
+    total = 0
+    limit = len(left)
+    if width % 8 != 0:
+        limit -= 1
+    for index in range(limit):
+        total += (left[index] ^ right[index]).bit_count()
+    if width % 8 != 0:
+        total += ((left[-1] ^ right[-1]) & _valid_bits_mask(width)).bit_count()
+    return total
+
+
+def compare_one_bit_tiffs(generated_tiff: str, target_tiff: str) -> dict:
+    generated = read_uncompressed_one_bit_tiff_info(generated_tiff)
+    target = read_uncompressed_one_bit_tiff_info(target_tiff)
+    if generated.width != target.width or generated.height != target.height:
+        return {
+            "same_shape": False,
+            "generated_shape": [generated.height, generated.width],
+            "target_shape": [target.height, target.width],
+        }
+    mismatch_count = 0
+    generated_black = 0
+    target_black = 0
+    total_pixels = generated.width * generated.height
+    for generated_row, target_row in zip(iter_tiff_rows(generated), iter_tiff_rows(target)):
+        mismatch_count += _count_mismatch_in_packed_rows(generated_row, target_row, generated.width)
+        generated_black += _count_black_in_packed_row(generated_row, generated.width)
+        target_black += _count_black_in_packed_row(target_row, target.width)
+    return {
+        "same_shape": True,
+        "generated_shape": [generated.height, generated.width],
+        "target_shape": [target.height, target.width],
+        "mismatch_count": mismatch_count,
+        "total_pixels": total_pixels,
+        "mismatch_ratio": mismatch_count / total_pixels if total_pixels else 0.0,
+        "black_ratio_generated": generated_black / total_pixels if total_pixels else 0.0,
+        "black_ratio_target": target_black / total_pixels if total_pixels else 0.0,
+        "generated_black_pixels": generated_black,
+        "target_black_pixels": target_black,
+    }
+
+
+def halftone_interlaced_tiff(
+    interlaced_tiff: str,
+    film_tiff: str,
+    *,
+    profile: HalftoneProfile = LBY_LIKE_PROFILE,
+    ppi: Optional[int] = None,
+    manifest_json: Optional[str] = None,
+    target_tiff: Optional[str] = None,
+    calibration_report_json: Optional[str] = None,
+    progress_callback: Optional[ProgressCallback] = None,
+    stop_callback: Optional[StopCallback] = None,
+) -> dict:
+    start_time = time.perf_counter()
+    info = read_uncompressed_rgb_tiff_info(interlaced_tiff)
+    output_ppi = int(ppi or info.dpi_x or 4000)
+    tmp_film = _tmp_path(film_tiff)
+    tmp_manifest = _tmp_path(manifest_json) if manifest_json else None
+    tmp_report = _tmp_path(calibration_report_json) if calibration_report_json else None
+    for path in (tmp_film, tmp_manifest, tmp_report):
+        if path:
+            _remove_if_exists(path)
+
+    halftoner = StreamingHalftoner(
+        info.width,
+        HalftoneSettings(method="LBY", lpi=profile.lpi, angle_degrees=profile.angle_degrees, dot_shape=profile.dot_shape, gamma=profile.gamma),
+        output_ppi,
+        profile=profile,
+    )
+    total_black = 0
+    try:
+        _emit_progress(progress_callback, "读取交织 TIFF 并挂网", 0, info.height, os.path.basename(interlaced_tiff))
+        with OneBitTiffWriter(tmp_film, info.width, info.height, output_ppi) as writer:
+            for y, row in enumerate(iter_tiff_rows(info)):
+                _check_stop(stop_callback)
+                black_row = halftoner.process_rgb_row(y, row)
+                if _np is not None and hasattr(black_row, "dtype"):
+                    total_black += int(_np.count_nonzero(black_row))
+                else:
+                    total_black += sum(1 for value in black_row if value)
+                writer.write_black_row(black_row)
+                if y == 0 or y == info.height - 1 or (y + 1) % max(1, info.height // 100) == 0:
+                    _emit_progress(progress_callback, "读取交织 TIFF 并挂网", y + 1, info.height)
+
+        elapsed = time.perf_counter() - start_time
+        total_pixels = info.width * info.height
+        report = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "pipeline": "interlaced_tiff_to_profiled_1bit_tiff",
+            "interlaced_tiff": {
+                "path": interlaced_tiff,
+                "width_px": info.width,
+                "height_px": info.height,
+                "dpi_x": info.dpi_x,
+                "dpi_y": info.dpi_y,
+                "is_bigtiff": info.is_bigtiff,
+                "compression": "none",
+                "photometric_interpretation": info.photometric_interpretation,
+            },
+            "film_tiff": {
+                "path": film_tiff,
+                "width_px": info.width,
+                "height_px": info.height,
+                "ppi": output_ppi,
+                "bits_per_sample": 1,
+                "photometric_interpretation": 1,
+                "black_is_zero": True,
+                "black_pixels": total_black,
+                "black_ratio": total_black / total_pixels if total_pixels else 0.0,
+            },
+            "halftone_profile": halftone_profile_to_manifest(profile),
+            "elapsed_seconds": elapsed,
+        }
+        if target_tiff:
+            _emit_progress(progress_callback, "生成校准报告", 0, 1, os.path.basename(target_tiff))
+            comparison = compare_one_bit_tiffs(tmp_film, target_tiff)
+            report["target_tiff"] = {
+                "path": target_tiff,
+            }
+            report["comparison"] = comparison
+            _emit_progress(progress_callback, "生成校准报告", 1, 1)
+
+        if manifest_json:
+            os.makedirs(os.path.dirname(os.path.abspath(manifest_json)), exist_ok=True)
+            with open(tmp_manifest, "w", encoding="utf-8") as f:
+                json.dump(report, f, ensure_ascii=False, indent=2)
+        if calibration_report_json:
+            os.makedirs(os.path.dirname(os.path.abspath(calibration_report_json)), exist_ok=True)
+            with open(tmp_report, "w", encoding="utf-8") as f:
+                json.dump(report, f, ensure_ascii=False, indent=2)
+
+        os.replace(tmp_film, film_tiff)
+        if manifest_json:
+            os.replace(tmp_manifest, manifest_json)
+        if calibration_report_json:
+            os.replace(tmp_report, calibration_report_json)
+        _emit_progress(progress_callback, "完成", 1, 1, os.path.dirname(os.path.abspath(film_tiff)))
+        return report
+    except Exception:
+        for path in (tmp_film, tmp_manifest, tmp_report):
+            if path:
+                _remove_if_exists(path)
+        raise
+
+
 def build_manifest(settings: DeliverySettings, result: DeliveryResult, source_paths: Sequence[str]) -> dict:
     if settings.source_format:
         source_ext = "jpg" if settings.source_format.upper() in {"JPG", "JPEG"} else settings.source_format.lower()
@@ -1653,18 +2055,7 @@ def build_manifest(settings: DeliverySettings, result: DeliveryResult, source_pa
     if (settings.halftone.method or "").upper() == "LBY":
         halftone.update(
             {
-                "algorithm": "LBY-like approximate AM diamond screen",
-                "density_scale_reference": LBY_LIKE_THRESHOLD,
-                "screen_lpi": LBY_LIKE_AM_LPI,
-                "screen_angle_degrees": LBY_LIKE_AM_ANGLE_DEGREES,
-                "screen_gamma": LBY_LIKE_AM_GAMMA,
-                "screen_density_scale": LBY_LIKE_AM_DENSITY_SCALE,
-                "screen_phase_x": LBY_LIKE_AM_PHASE_X,
-                "screen_phase_y": LBY_LIKE_AM_PHASE_Y,
-                "screen_dot_shape": LBY_LIKE_AM_DOT_SHAPE,
-                "photometric_interpretation": 1,
-                "black_is_zero": LBY_LIKE_BLACK_IS_ZERO,
-                "fit_note": LBY_LIKE_FIT_NOTE,
+                **halftone_profile_to_manifest(LBY_LIKE_PROFILE),
             }
         )
     return {

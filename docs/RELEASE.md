@@ -47,46 +47,40 @@ Use this checklist when publishing a GitHub Release.
 Recommended tag format:
 
 ```text
-v0.1.17
+v0.1.18
 ```
 
 Recommended title:
 
 ```text
-Light Field Render v0.1.17
+Light Field Render v0.1.18
 ```
 
 Release asset:
 
 ```text
-dist/light_field_render-v0.1.17.zip
+dist/light_field_render-v0.1.18.zip
 ```
 
 Suggested release notes:
 
 ```markdown
-## Light Field Render v0.1.17
+## Light Field Render v0.1.18
 
-AM diamond LBY-like print TIFF fitting.
+Separated profile-based halftone workflow and calibration reports.
 
 ### Features
 
-- Changes `LBY-like近似` from the previous FM-like stochastic screen to a deterministic AM diamond clustered-dot screen fitted from the available 150 JPG -> 1-bit TIFF factory pair.
-- Keeps direct native Windows WIC decoding for JPG source views in the background delivery worker, avoiding slow UI-thread JPG conversion.
-- Confirms delivery interlace remains whole-pixel PE interlace, not RGB subpixel interlace.
+- Adds explicit `LBY_approx_am_diamond_v1` halftone profile metadata for the LBY-like AM diamond screen.
+- Adds `从交织图生成菲林 TIFF`: reads an existing add-on generated `interlaced.tif`, applies the fixed profile, and writes `film_1bit.tif` without rerendering or reinterlacing.
+- Adds `halftone_calibration_report.json` with input TIFF metadata, profile parameters, output black ratio, elapsed time, and optional target comparison.
+- Adds streaming 1-bit TIFF comparison for vendor targets, reporting shape, mismatch count/ratio, generated black ratio, and target black ratio without loading the whole image into memory.
+- Keeps the hard production boundary: unsupported TIFF compression/layouts fail explicitly instead of falling back silently.
+- Keeps direct delivery generation, JPG source loading, whole-pixel PE interlace, and the native fast path from `v0.1.17`.
 - Full-size direct-JPG test with 150 source views at `2160 x 3651`, final `30551 x 54342`, `4000 PPI`, `PE=52.64`, reversed views: total generation time about `12.5s`.
 - Full-size comparison against `618空间_dats_dats.tif`: mismatch about `10.67%`, generated black ratio about `11.71%`, target black ratio about `15.31%`.
-- Uses AM diamond parameters recorded in `delivery_manifest.json`: `65 LPI`, `75°`, `gamma=2.0`, `density_scale=2.5`, phase X `20.512820512820515`, phase Y `41.02564102564103`.
-- Leaves `LBY-like近似` explicitly documented as an approximation, not a bitwise clone of the factory RIP.
-- Defaults source-view output to JPG quality 95 while retaining PNG and continuous TIFF options.
-- Forces Standard color management while writing JPG source views, then restores the scene settings.
-- Reads disk JPG source views for final delivery so factory handoff inputs and plugin inputs match.
-- Keeps final delivery interlacing as whole-pixel view selection.
-- Keeps `只生成连续调交织图` for interlaced-only output without `film_1bit.tif`.
-- Writes `film_1bit.tif` as uncompressed 1-bit TIFF with `PhotometricInterpretation=1` (`0=black`, `1=white`).
-- Adds local real-pair analysis tooling under `scripts/analyze_lby_pair.py` without committing the large sample images.
 
 ### Installation
 
-Download `light_field_render-v0.1.17.zip`, then install it from Blender via `Edit > Preferences > Add-ons > Install...`.
+Download `light_field_render-v0.1.18.zip`, then install it from Blender via `Edit > Preferences > Add-ons > Install...`.
 ```

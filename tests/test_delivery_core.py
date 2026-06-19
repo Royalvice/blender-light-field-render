@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import shutil
 import struct
 import sys
 import tempfile
@@ -87,6 +88,9 @@ class DeliveryCoreTests(unittest.TestCase):
             self.assertEqual(tags[256][2], 2)
             self.assertEqual(tags[257][2], 2)
             self.assertEqual(tags[277][2] & 0xFFFF, 3)
+            rgb_info = self.delivery.read_uncompressed_rgb_tiff_info(rgb_tiff)
+            self.assertEqual((rgb_info.width, rgb_info.height), (2, 2))
+            self.assertEqual(list(self.delivery.iter_tiff_rows(rgb_info)), rows)
 
             bit_tiff = os.path.join(tmp, "bit.tif")
             with self.delivery.OneBitTiffWriter(bit_tiff, 2, 2, 300) as writer:
@@ -98,6 +102,8 @@ class DeliveryCoreTests(unittest.TestCase):
             self.assertEqual(tags[277][2] & 0xFFFF, 1)
             payload = Path(bit_tiff).read_bytes()[-2:]
             self.assertEqual(payload, bytes([0x40, 0x80]))
+            bit_info = self.delivery.read_uncompressed_one_bit_tiff_info(bit_tiff)
+            self.assertEqual((bit_info.width, bit_info.height), (2, 2))
 
     def test_bigtiff_writers_use_64bit_offsets_and_counts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -143,6 +149,44 @@ class DeliveryCoreTests(unittest.TestCase):
         )
         extremes = extremes_halftoner.process_rgb_row(1, bytes([0, 0, 0, 255, 255, 255]))
         self.assertEqual(list(extremes), [True, False])
+
+    def test_halftone_interlaced_tiff_writes_report_and_comparison(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            interlaced = os.path.join(tmp, "interlaced.tif")
+            rows = [
+                bytes([0, 0, 0, 255, 255, 255, 128, 128, 128, 64, 64, 64]),
+                bytes([255, 255, 255, 0, 0, 0, 128, 128, 128, 192, 192, 192]),
+            ]
+            with self.delivery.RgbTiffWriter(interlaced, 4, 2, 4000) as writer:
+                for row in rows:
+                    writer.write_row(row)
+
+            film = os.path.join(tmp, "film_1bit.tif")
+            report_path = os.path.join(tmp, "halftone_calibration_report.json")
+            report = self.delivery.halftone_interlaced_tiff(
+                interlaced,
+                film,
+                ppi=4000,
+                calibration_report_json=report_path,
+            )
+            self.assertTrue(os.path.exists(film))
+            self.assertTrue(os.path.exists(report_path))
+            self.assertEqual(report["halftone_profile"]["profile_name"], "LBY_approx_am_diamond_v1")
+            self.assertEqual(report["film_tiff"]["width_px"], 4)
+            self.assertEqual(report["film_tiff"]["height_px"], 2)
+
+            target = os.path.join(tmp, "target.tif")
+            shutil.copyfile(film, target)
+            compared = self.delivery.halftone_interlaced_tiff(
+                interlaced,
+                film,
+                ppi=4000,
+                target_tiff=target,
+                calibration_report_json=report_path,
+            )
+            self.assertTrue(compared["comparison"]["same_shape"])
+            self.assertEqual(compared["comparison"]["mismatch_count"], 0)
+            self.assertEqual(compared["comparison"]["mismatch_ratio"], 0.0)
 
     def test_generate_delivery_outputs_writes_expected_files_and_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:

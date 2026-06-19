@@ -14,6 +14,7 @@ from .render_ops import (
 from .delivery_ops import (
     LIGHTFIELD_OT_generate_delivery,
     LIGHTFIELD_OT_generate_interlaced,
+    LIGHTFIELD_OT_halftone_interlaced,
     LIGHTFIELD_OT_stop_delivery,
 )
 
@@ -28,6 +29,7 @@ classes = [
     LIGHTFIELD_OT_stop_render,
     LIGHTFIELD_OT_generate_delivery,
     LIGHTFIELD_OT_generate_interlaced,
+    LIGHTFIELD_OT_halftone_interlaced,
     LIGHTFIELD_OT_stop_delivery,
 ]
 

@@ -262,6 +262,7 @@ class LIGHTFIELD_PT_delivery_output(Panel):
             col.label(text="输出 interlaced_preview.png 用于检查")
         col.label(text="film_1bit.tif / delivery_manifest.json")
         col.label(text="1-bit 输出算法：LBY-like近似", icon="INFO")
+        col.prop(props, "delivery_calibration_target_tiff", text="校准目标 TIFF")
 
         layout.separator()
         col = layout.column(align=True)
@@ -276,6 +277,7 @@ class LIGHTFIELD_PT_delivery_output(Panel):
                 box.label(text=props.delivery_info)
         else:
             col.operator("lightfield.generate_interlaced", text="只生成连续调交织图", icon="IMAGE_DATA")
+            col.operator("lightfield.halftone_interlaced", text="从交织图生成菲林 TIFF", icon="TEXTURE")
             col.operator("lightfield.generate_delivery", text="生成当前帧交付文件", icon="RENDER_RESULT")
             if props.delivery_last_output_dir:
                 layout.label(text=f"最近输出: {props.delivery_last_output_dir}", icon="FILE_FOLDER")

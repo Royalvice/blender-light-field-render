@@ -102,7 +102,11 @@ def assert_rgb_tiff(path: Path, width: int, height: int):
 
 def assert_localized_ui(scene):
     from light_field_plugin.operators.create_ops import LIGHTFIELD_OT_create
-    from light_field_plugin.operators.delivery_ops import LIGHTFIELD_OT_generate_delivery, LIGHTFIELD_OT_stop_delivery
+    from light_field_plugin.operators.delivery_ops import (
+        LIGHTFIELD_OT_generate_delivery,
+        LIGHTFIELD_OT_halftone_interlaced,
+        LIGHTFIELD_OT_stop_delivery,
+    )
     from light_field_plugin.operators.render_ops import LIGHTFIELD_OT_render_animation, LIGHTFIELD_OT_render_frame
     from light_field_plugin.panels.main_panel import (
         LIGHTFIELD_PT_delivery_output,
@@ -118,6 +122,7 @@ def assert_localized_ui(scene):
     assert LIGHTFIELD_OT_render_animation.bl_label == "渲染动画", LIGHTFIELD_OT_render_animation.bl_label
     assert LIGHTFIELD_PT_delivery_output.bl_label == "最终交付输出", LIGHTFIELD_PT_delivery_output.bl_label
     assert LIGHTFIELD_OT_generate_delivery.bl_label == "生成当前帧交付文件", LIGHTFIELD_OT_generate_delivery.bl_label
+    assert LIGHTFIELD_OT_halftone_interlaced.bl_label == "从交织图生成菲林 TIFF", LIGHTFIELD_OT_halftone_interlaced.bl_label
     assert LIGHTFIELD_OT_stop_delivery.bl_label == "停止交付生成", LIGHTFIELD_OT_stop_delivery.bl_label
 
     props_rna = scene.light_field_props.bl_rna.properties
@@ -126,6 +131,7 @@ def assert_localized_ui(scene):
     assert props_rna["output_file_format"].enum_items["JPG"].name == "JPG"
     assert props_rna["jpeg_quality"].name == "JPG 质量", props_rna["jpeg_quality"].name
     assert props_rna["delivery_width_mm"].name == "交付宽度", props_rna["delivery_width_mm"].name
+    assert props_rna["delivery_calibration_target_tiff"].name == "校准目标 TIFF", props_rna["delivery_calibration_target_tiff"].name
 
 
 def main():
@@ -233,6 +239,26 @@ def main():
     assert manifest["delivery"]["write_film_tiff"] is False, manifest["delivery"]
     assert manifest["files"]["interlaced_tiff"] == "interlaced.tif", manifest["files"]
     assert manifest["files"]["film_1bit_tiff"] is None, manifest["files"]
+
+    props.delivery_calibration_target_tiff = ""
+    result = bpy.ops.lightfield.halftone_interlaced()
+    assert result == {"FINISHED"}, result
+    assert film.exists(), f"Missing standalone halftone {film}"
+    assert_1bit_tiff(film, 20, 10)
+    halftone_report = delivery_dir / "halftone_calibration_report.json"
+    assert halftone_report.exists(), f"Missing {halftone_report}"
+    profile_report = json.loads(halftone_report.read_text(encoding="utf-8"))
+    assert profile_report["pipeline"] == "interlaced_tiff_to_profiled_1bit_tiff", profile_report
+    assert profile_report["halftone_profile"]["profile_name"] == "LBY_approx_am_diamond_v1", profile_report
+    assert profile_report["film_tiff"]["width_px"] == 20, profile_report
+    assert profile_report["film_tiff"]["height_px"] == 10, profile_report
+
+    props.delivery_calibration_target_tiff = str(film)
+    result = bpy.ops.lightfield.halftone_interlaced()
+    assert result == {"FINISHED"}, result
+    calibrated_report = json.loads(halftone_report.read_text(encoding="utf-8"))
+    assert calibrated_report["comparison"]["same_shape"] is True, calibrated_report
+    assert calibrated_report["comparison"]["mismatch_count"] == 0, calibrated_report
 
     props.delivery_width_mm = 1000
     props.delivery_height_mm = 1000
