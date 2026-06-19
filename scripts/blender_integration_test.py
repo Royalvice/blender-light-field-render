@@ -212,10 +212,10 @@ def main():
     assert manifest["source_views"]["source_format"] == "JPG", manifest["source_views"]
     assert manifest["source_views"]["files"][0] == "camera_000.jpg", manifest["source_views"]
     assert manifest["halftone"]["method"] == "LBY", manifest["halftone"]
-    assert manifest["halftone"]["algorithm"] == "LBY-like approximate AM diamond screen", manifest["halftone"]
-    assert manifest["halftone"]["density_scale_reference"] == 178, manifest["halftone"]
-    assert manifest["halftone"]["screen_lpi"] == 65.0, manifest["halftone"]
-    assert manifest["halftone"]["screen_dot_shape"] == "DIAMOND", manifest["halftone"]
+    assert manifest["halftone"]["algorithm"] == "LBY-like 18 px horizontal row-threshold screen", manifest["halftone"]
+    assert manifest["halftone"]["family"] == "ROW_THRESHOLD", manifest["halftone"]
+    assert manifest["halftone"]["screen_period_px"] == 18.0, manifest["halftone"]
+    assert manifest["halftone"]["screen_density"] == 0.25, manifest["halftone"]
     assert manifest["halftone"]["black_is_zero"] is True, manifest["halftone"]
     assert manifest["files"]["interlaced_tiff"] is None, manifest["files"]
     assert manifest["files"]["film_1bit_tiff"] == "film_1bit.tif", manifest["files"]
@@ -249,7 +249,7 @@ def main():
     assert halftone_report.exists(), f"Missing {halftone_report}"
     profile_report = json.loads(halftone_report.read_text(encoding="utf-8"))
     assert profile_report["pipeline"] == "interlaced_tiff_to_profiled_1bit_tiff", profile_report
-    assert profile_report["halftone_profile"]["profile_name"] == "LBY_approx_am_diamond_v1", profile_report
+    assert profile_report["halftone_profile"]["profile_name"] == "LBY_row_threshold_v1", profile_report
     assert profile_report["film_tiff"]["width_px"] == 20, profile_report
     assert profile_report["film_tiff"]["height_px"] == 10, profile_report
 

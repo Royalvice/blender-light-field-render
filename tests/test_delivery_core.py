@@ -129,25 +129,26 @@ class DeliveryCoreTests(unittest.TestCase):
             self.assertEqual(tags[279][2], 2)
             self.assertEqual(tags[262][2] & 0xFFFF, 1)
 
-    def test_lby_halftoner_outputs_deterministic_dot_screen(self):
+    def test_lby_halftoner_outputs_deterministic_row_threshold_screen(self):
         halftoner = self.delivery.StreamingHalftoner(
             96,
-            self.delivery.HalftoneSettings(method="LBY", gamma=1.0),
+            self.delivery.HalftoneSettings(method="LBY", gamma=0.25, line_density=0.25),
             4000,
         )
         row = bytes([160, 160, 160] * 96)
         result = halftoner.process_rgb_row(0, row)
         repeat = halftoner.process_rgb_row(0, row)
         self.assertEqual(list(result), list(repeat))
-        self.assertGreater(sum(bool(value) for value in result), 0)
-        self.assertLess(sum(bool(value) for value in result), 96)
+        self.assertEqual(sum(bool(value) for value in result), 0)
+        dark_phase = halftoner.process_rgb_row(17, row)
+        self.assertEqual(sum(bool(value) for value in dark_phase), 96)
 
         extremes_halftoner = self.delivery.StreamingHalftoner(
             2,
-            self.delivery.HalftoneSettings(method="LBY", gamma=1.0),
+            self.delivery.HalftoneSettings(method="LBY", gamma=0.25, line_density=0.25),
             4000,
         )
-        extremes = extremes_halftoner.process_rgb_row(1, bytes([0, 0, 0, 255, 255, 255]))
+        extremes = extremes_halftoner.process_rgb_row(17, bytes([0, 0, 0, 255, 255, 255]))
         self.assertEqual(list(extremes), [True, False])
 
     def test_halftone_interlaced_tiff_writes_report_and_comparison(self):
@@ -171,7 +172,8 @@ class DeliveryCoreTests(unittest.TestCase):
             )
             self.assertTrue(os.path.exists(film))
             self.assertTrue(os.path.exists(report_path))
-            self.assertEqual(report["halftone_profile"]["profile_name"], "LBY_approx_am_diamond_v1")
+            self.assertEqual(report["halftone_profile"]["profile_name"], "LBY_row_threshold_v1")
+            self.assertEqual(report["halftone_profile"]["family"], "ROW_THRESHOLD")
             self.assertEqual(report["film_tiff"]["width_px"], 4)
             self.assertEqual(report["film_tiff"]["height_px"], 2)
 

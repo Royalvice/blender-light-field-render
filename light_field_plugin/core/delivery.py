@@ -26,18 +26,36 @@ LARGE_OUTPUT_PIXELS = 100_000_000
 SOURCE_UPSCALE_WARNING_FACTOR = 2.0
 PREVIEW_MAX_EDGE = 2048
 UINT32_MAX = 0xFFFFFFFF
-LBY_LIKE_THRESHOLD = 178
 LBY_LIKE_BLACK_IS_ZERO = True
-LBY_LIKE_AM_LPI = 65.0
-LBY_LIKE_AM_ANGLE_DEGREES = 75.0
-LBY_LIKE_AM_GAMMA = 2.0
-LBY_LIKE_AM_DENSITY_SCALE = 2.5
-LBY_LIKE_AM_PHASE_X = 20.512820512820515
-LBY_LIKE_AM_PHASE_Y = 41.02564102564103
-LBY_LIKE_AM_DOT_SHAPE = "DIAMOND"
+LBY_LINE_PERIOD_PX = 18.0
+LBY_LINE_PHASE_Y = 0.0
+LBY_LINE_GAMMA = 0.25
+LBY_LINE_DENSITY = 0.25
+LBY_LINE_BIAS = -0.05
+LBY_LINE_THRESHOLDS = (
+    0.95,
+    0.1797855943441391,
+    0.17851249873638153,
+    0.17819088697433472,
+    0.1600176990032196,
+    0.1530652940273285,
+    0.147835835814476,
+    0.147835835814476,
+    0.147835835814476,
+    0.147835835814476,
+    0.12555083632469177,
+    0.11203472316265106,
+    0.11203472316265106,
+    0.10605093836784363,
+    0.10605093836784363,
+    0.10605093836784363,
+    0.06879298388957977,
+    0.038474876433610916,
+)
 LBY_LIKE_FIT_NOTE = (
     "whole-pixel PE interlace, reversed view order recommended by vendor pair, "
-    "clustered-dot AM diamond screen fitted from the 150 JPG -> TIFF sample"
+    "18 px horizontal row-threshold screen fitted on target-active regions from the 150 JPG -> TIFF sample; "
+    "full-size target-active mismatch 3.7562% with a 32 px dilated target-black mask"
 )
 
 
@@ -103,6 +121,12 @@ def _load_native_dll():
             ctypes.POINTER(ctypes.c_int32),
             ctypes.POINTER(ctypes.c_float),
             ctypes.c_double,
+            ctypes.c_double,
+            ctypes.c_double,
+            ctypes.c_double,
+            ctypes.c_double,
+            ctypes.c_double,
+            ctypes.POINTER(ctypes.c_double),
             ctypes.c_int,
             ctypes.POINTER(ctypes.c_uint8),
             ctypes.POINTER(ctypes.c_uint8),
@@ -136,31 +160,27 @@ class HalftoneProfile:
     name: str
     algorithm: str
     family: str
-    lpi: float
-    angle_degrees: float
-    gamma: float
-    density_scale: float
-    phase_x: float
+    period_px: float
     phase_y: float
-    dot_shape: str
-    density_scale_reference: int
+    gamma: float
+    density: float
+    bias: float
+    thresholds: Tuple[float, ...]
     photometric_interpretation: int
     black_is_zero: bool
     fit_note: str
 
 
 LBY_LIKE_PROFILE = HalftoneProfile(
-    name="LBY_approx_am_diamond_v1",
-    algorithm="LBY-like approximate AM diamond screen",
-    family="AM_CLUSTERED",
-    lpi=LBY_LIKE_AM_LPI,
-    angle_degrees=LBY_LIKE_AM_ANGLE_DEGREES,
-    gamma=LBY_LIKE_AM_GAMMA,
-    density_scale=LBY_LIKE_AM_DENSITY_SCALE,
-    phase_x=LBY_LIKE_AM_PHASE_X,
-    phase_y=LBY_LIKE_AM_PHASE_Y,
-    dot_shape=LBY_LIKE_AM_DOT_SHAPE,
-    density_scale_reference=LBY_LIKE_THRESHOLD,
+    name="LBY_row_threshold_v1",
+    algorithm="LBY-like 18 px horizontal row-threshold screen",
+    family="ROW_THRESHOLD",
+    period_px=LBY_LINE_PERIOD_PX,
+    phase_y=LBY_LINE_PHASE_Y,
+    gamma=LBY_LINE_GAMMA,
+    density=LBY_LINE_DENSITY,
+    bias=LBY_LINE_BIAS,
+    thresholds=LBY_LINE_THRESHOLDS,
     photometric_interpretation=1,
     black_is_zero=LBY_LIKE_BLACK_IS_ZERO,
     fit_note=LBY_LIKE_FIT_NOTE,
@@ -172,14 +192,12 @@ def halftone_profile_to_manifest(profile: HalftoneProfile) -> dict:
         "profile_name": profile.name,
         "algorithm": profile.algorithm,
         "family": profile.family,
-        "density_scale_reference": profile.density_scale_reference,
-        "screen_lpi": profile.lpi,
-        "screen_angle_degrees": profile.angle_degrees,
+        "screen_period_px": profile.period_px,
         "screen_gamma": profile.gamma,
-        "screen_density_scale": profile.density_scale,
-        "screen_phase_x": profile.phase_x,
+        "screen_density": profile.density,
+        "screen_bias": profile.bias,
         "screen_phase_y": profile.phase_y,
-        "screen_dot_shape": profile.dot_shape,
+        "screen_thresholds": list(profile.thresholds),
         "photometric_interpretation": profile.photometric_interpretation,
         "black_is_zero": profile.black_is_zero,
         "fit_note": profile.fit_note,
@@ -201,6 +219,9 @@ class HalftoneSettings:
     angle_degrees: float = 45.0
     dot_shape: str = "ROUND"
     gamma: float = 1.0
+    line_period_px: float = LBY_LINE_PERIOD_PX
+    line_phase_y: float = LBY_LINE_PHASE_Y
+    line_density: float = LBY_LINE_DENSITY
 
 
 @dataclass
@@ -1147,48 +1168,38 @@ class StreamingHalftoner:
 
     def _process_lby_row(self, y: int, row: bytes) -> List[bool]:
         profile = self.profile
-        angle = math.radians(profile.angle_degrees)
-        cosv = math.cos(angle)
-        sinv = math.sin(angle)
-        cell = float(self.dpi) / profile.lpi
-        density_scale = profile.density_scale * (float(profile.density_scale_reference) / 178.0)
+        period = max(1.0, float(self.settings.line_period_px or profile.period_px))
+        phase_y = float(self.settings.line_phase_y)
+        gamma = max(1.0e-6, float(self.settings.gamma or profile.gamma))
+        density = float(self.settings.line_density or profile.density)
+        bias = float(profile.bias)
+        thresholds = profile.thresholds
         black = [False for _ in range(self.width)]
+        screen_phase = int(math.floor((float(y) + phase_y) % period)) % len(thresholds)
+        threshold = float(thresholds[screen_phase])
         for x in range(self.width):
             offset = x * 3
             r = row[offset]
             g = row[offset + 1]
             b = row[offset + 2]
-            luma = 0.2126 * r + 0.7152 * g + 0.0722 * b
-            luma_norm = (max(0.0, min(255.0, luma)) / 255.0) ** (1.0 / profile.gamma)
-            darkness = (1.0 - luma_norm) * density_scale
-            darkness = max(0.0, min(1.0, darkness))
-            xr = float(x) * cosv + float(y) * sinv + profile.phase_x
-            yr = -float(x) * sinv + float(y) * cosv + profile.phase_y
-            u = ((xr / cell) - math.floor(xr / cell)) * 2.0 - 1.0
-            v = ((yr / cell) - math.floor(yr / cell)) * 2.0 - 1.0
-            metric = (abs(u) + abs(v)) / 2.0
-            black[x] = metric <= darkness
+            luma = 0.299 * r + 0.587 * g + 0.114 * b
+            luma_norm = max(0.0, min(1.0, luma / 255.0))
+            darkness = 1.0 - luma_norm
+            adjusted = density * (darkness ** gamma) + bias
+            black[x] = max(0.0, min(1.0, adjusted)) >= threshold
         return black
 
     def _process_lby_row_numpy(self, y: int, row: bytes):
         profile = self.profile
         rgb = _np.frombuffer(row, dtype=_np.uint8).reshape(self.width, 3).astype(_np.float64)
-        luma = 0.2126 * rgb[:, 0] + 0.7152 * rgb[:, 1] + 0.0722 * rgb[:, 2]
-        luma_norm = _np.power(_np.clip(luma / 255.0, 0.0, 1.0), 1.0 / profile.gamma)
-        density_scale = profile.density_scale * (float(profile.density_scale_reference) / 178.0)
-        darkness = (1.0 - luma_norm) * density_scale
-        darkness = _np.clip(darkness, 0.0, 1.0)
-        x = self._x_np
-        angle = math.radians(profile.angle_degrees)
-        cosv = math.cos(angle)
-        sinv = math.sin(angle)
-        cell = float(self.dpi) / profile.lpi
-        xr = x * cosv + float(y) * sinv + profile.phase_x
-        yr = -x * sinv + float(y) * cosv + profile.phase_y
-        u = ((xr / cell) - _np.floor(xr / cell)) * 2.0 - 1.0
-        v = ((yr / cell) - _np.floor(yr / cell)) * 2.0 - 1.0
-        metric = (_np.abs(u) + _np.abs(v)) / 2.0
-        return metric <= darkness
+        luma = 0.299 * rgb[:, 0] + 0.587 * rgb[:, 1] + 0.114 * rgb[:, 2]
+        darkness = 1.0 - _np.clip(luma / 255.0, 0.0, 1.0)
+        gamma = max(1.0e-6, float(self.settings.gamma or profile.gamma))
+        density = float(self.settings.line_density or profile.density)
+        adjusted = _np.clip(density * _np.power(darkness, gamma) + float(profile.bias), 0.0, 1.0)
+        period = max(1.0, float(self.settings.line_period_px or profile.period_px))
+        screen_phase = int(math.floor((float(y) + float(self.settings.line_phase_y)) % period)) % len(profile.thresholds)
+        return adjusted >= float(profile.thresholds[screen_phase])
 
     def _process_am_row(self, y: int, row: bytes) -> List[bool]:
         shape = (self.settings.dot_shape or "ROUND").upper()
@@ -1524,6 +1535,7 @@ class NativeAmBatchGenerator:
         self.cell_size = max(2.0, float(settings.ppi) / max(1.0, float(settings.halftone.lpi)))
         shape = (settings.halftone.dot_shape or "ROUND").upper()
         self.dot_shape = {"ROUND": 0, "DIAMOND": 1, "ELLIPSE": 2}.get(shape, 0)
+        self.lby_thresholds = _np.ascontiguousarray(_np.asarray(LBY_LIKE_PROFILE.thresholds, dtype=_np.float64))
 
     @classmethod
     def can_use(cls, renderer: InterlaceRenderer, settings: DeliverySettings) -> bool:
@@ -1558,7 +1570,13 @@ class NativeAmBatchGenerator:
                 self._ptr(self.x1, ctypes.c_int32),
                 self._ptr(self.tx, ctypes.c_float),
                 float(self.y_scale),
-                int(LBY_LIKE_THRESHOLD),
+                float(self.settings.halftone.line_period_px or LBY_LIKE_PROFILE.period_px),
+                float(self.settings.halftone.line_phase_y),
+                float(self.settings.halftone.gamma or LBY_LIKE_PROFILE.gamma),
+                float(self.settings.halftone.line_density or LBY_LIKE_PROFILE.density),
+                float(LBY_LIKE_PROFILE.bias),
+                self._ptr(self.lby_thresholds, ctypes.c_double),
+                int(self.lby_thresholds.size),
                 self._ptr(rgb, ctypes.c_uint8),
                 self._ptr(bits, ctypes.c_uint8),
                 self.row_bytes,
@@ -1962,7 +1980,13 @@ def halftone_interlaced_tiff(
 
     halftoner = StreamingHalftoner(
         info.width,
-        HalftoneSettings(method="LBY", lpi=profile.lpi, angle_degrees=profile.angle_degrees, dot_shape=profile.dot_shape, gamma=profile.gamma),
+        HalftoneSettings(
+            method="LBY",
+            gamma=profile.gamma,
+            line_period_px=profile.period_px,
+            line_phase_y=profile.phase_y,
+            line_density=profile.density,
+        ),
         output_ppi,
         profile=profile,
     )

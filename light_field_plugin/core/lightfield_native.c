@@ -34,7 +34,13 @@ typedef struct LfBatchJob {
     double inv_gamma;
     int use_gamma;
     int dot_shape;
-    int lby_threshold;
+    double lby_period_px;
+    double lby_phase_y;
+    double lby_gamma;
+    double lby_density;
+    double lby_bias;
+    const double* lby_thresholds;
+    int lby_threshold_count;
     int lby_mode;
     uint8_t* rgb_out;
     uint8_t* bit_out;
@@ -62,11 +68,6 @@ static inline uint8_t clamp_round_u8(float value) {
 
 static void lf_process_rows(const LfBatchJob* job) {
     const int64_t source_plane = (int64_t)job->source_width * (int64_t)job->source_height * 3;
-    const double lby_cos = 0.25881904510252074; /* cos(75 degrees) */
-    const double lby_sin = 0.96592582628906831; /* sin(75 degrees) */
-    const double lby_inv_cell_size = 65.0 / 4000.0;
-    const double lby_density_scale = 2.5 * ((double)job->lby_threshold / 178.0);
-
     for (int row = job->row_begin; row < job->row_end; ++row) {
         const int final_y = job->y_start + row;
         const double sy = (double)final_y * job->y_scale;
@@ -115,20 +116,24 @@ static void lf_process_rows(const LfBatchJob* job) {
             if (bit_row) {
                 const double luma = 0.2126 * (double)rgb[0] + 0.7152 * (double)rgb[1] + 0.0722 * (double)rgb[2];
                 if (job->lby_mode) {
-                    double luma_norm = luma / 255.0;
+                    const double lby_luma = 0.299 * (double)rgb[0] + 0.587 * (double)rgb[1] + 0.114 * (double)rgb[2];
+                    double luma_norm = lby_luma / 255.0;
                     if (luma_norm < 0.0) luma_norm = 0.0;
                     if (luma_norm > 1.0) luma_norm = 1.0;
-                    double darkness = (1.0 - sqrt(luma_norm)) * lby_density_scale;
-                    if (darkness < 0.0) darkness = 0.0;
-                    if (darkness > 1.0) darkness = 1.0;
-                    const double xr = (double)x * lby_cos + (double)final_y * lby_sin + 20.512820512820515;
-                    const double yr = -(double)x * lby_sin + (double)final_y * lby_cos + 41.02564102564103;
-                    const double fx = xr * lby_inv_cell_size;
-                    const double fy = yr * lby_inv_cell_size;
-                    const double u = (fx - floor(fx)) * 2.0 - 1.0;
-                    const double v = (fy - floor(fy)) * 2.0 - 1.0;
-                    const double metric = (fabs(u) + fabs(v)) / 2.0;
-                    if (metric <= darkness) {
+                    double darkness = 1.0 - luma_norm;
+                    double adjusted = job->lby_density * pow(darkness, job->lby_gamma) + job->lby_bias;
+                    if (adjusted < 0.0) adjusted = 0.0;
+                    if (adjusted > 1.0) adjusted = 1.0;
+                    double period = job->lby_period_px > 1.0e-6 ? job->lby_period_px : 18.0;
+                    int threshold_index = (int)floor(fmod((double)final_y + job->lby_phase_y, period));
+                    if (threshold_index < 0) threshold_index += (int)period;
+                    if (job->lby_threshold_count > 0) {
+                        threshold_index %= job->lby_threshold_count;
+                    } else {
+                        threshold_index = 0;
+                    }
+                    const double threshold = job->lby_thresholds ? job->lby_thresholds[threshold_index] : 0.5;
+                    if (adjusted >= threshold) {
                         bit_row[x >> 3] &= (uint8_t)~(0x80 >> (x & 7));
                     }
                     continue;
@@ -230,7 +235,13 @@ LF_EXPORT int lf_generate_am_batch(
     base.inv_gamma = 1.0 / (gamma_value > 1.0e-6 ? gamma_value : 1.0e-6);
     base.use_gamma = fabs(gamma_value - 1.0) > 1.0e-6;
     base.dot_shape = dot_shape;
-    base.lby_threshold = -1;
+    base.lby_period_px = 18.0;
+    base.lby_phase_y = 0.0;
+    base.lby_gamma = 0.25;
+    base.lby_density = 0.25;
+    base.lby_bias = -0.05;
+    base.lby_thresholds = 0;
+    base.lby_threshold_count = 0;
     base.lby_mode = 0;
     base.rgb_out = rgb_out;
     base.bit_out = bit_out;
@@ -292,16 +303,22 @@ LF_EXPORT int lf_generate_lby_batch(
     const int32_t* x1_map,
     const float* tx_map,
     double y_scale,
-    int threshold,
+    double lby_period_px,
+    double lby_phase_y,
+    double lby_gamma,
+    double lby_density,
+    double lby_bias,
+    const double* lby_thresholds,
+    int lby_threshold_count,
     uint8_t* rgb_out,
     uint8_t* bit_out,
     int row_bytes
 ) {
-    if (!sources || !view_map || !x0_map || !x1_map || !tx_map || (!rgb_out && !bit_out)) {
+    if (!sources || !view_map || !x0_map || !x1_map || !tx_map || !lby_thresholds || (!rgb_out && !bit_out)) {
         return 1;
     }
     if (source_count <= 0 || source_width <= 0 || source_height <= 0 ||
-        final_width <= 0 || final_height <= 0 || batch_rows <= 0 || row_bytes <= 0) {
+        final_width <= 0 || final_height <= 0 || batch_rows <= 0 || row_bytes <= 0 || lby_threshold_count <= 0) {
         return 2;
     }
 
@@ -325,7 +342,13 @@ LF_EXPORT int lf_generate_lby_batch(
     base.inv_gamma = 1.0;
     base.use_gamma = 0;
     base.dot_shape = 0;
-    base.lby_threshold = threshold;
+    base.lby_period_px = lby_period_px;
+    base.lby_phase_y = lby_phase_y;
+    base.lby_gamma = lby_gamma > 1.0e-6 ? lby_gamma : 1.0e-6;
+    base.lby_density = lby_density;
+    base.lby_bias = lby_bias;
+    base.lby_thresholds = lby_thresholds;
+    base.lby_threshold_count = lby_threshold_count;
     base.lby_mode = 1;
     base.rgb_out = rgb_out;
     base.bit_out = bit_out;

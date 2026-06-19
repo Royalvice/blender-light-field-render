@@ -1,138 +1,132 @@
 # Light Field Render for Blender
 
-Light Field Render is a Blender add-on for creating and rendering a linear off-axis light-field camera array. It is intended for light-field display content generation, multi-view rendering, and camera-array visualization inside Blender.
+`Light Field Render` 是一个 Blender 4.2 LTS 插件，用于创建线性离轴光场相机阵列、批量渲染多视角序列图，并生成用于光栅/菲林交付的交织图和 1-bit TIFF。
 
-The repository is now organized around the Blender add-on. The older Three.js visualizer is preserved under `archive/web_viz/` for reference, but it is no longer the primary project entry point.
+仓库现在以 Blender 插件为主。旧 Three.js 可视化工具已归档在 `archive/web_viz/`，仅作为参考资料保留。
 
-## Features
+## 功能
 
-- Creates a configurable linear light-field camera array.
-- Uses Blender camera `shift_x` to implement off-axis projection.
-- Visualizes the focal plane and display depth volume with non-rendered helper objects.
-- Supports single-frame rendering across all cameras.
-- Supports animation rendering across all cameras and a selected frame range.
-- Supports JPG, PNG, and continuous TIFF source-view rendering. JPG is the default vendor handoff format.
-- Supports whole-pixel PE interlacing and LBY-like 1-bit print TIFF output.
-- Generates final delivery interlace files from customer physical size in mm plus PPI.
-- Outputs 2048px preview PNG, 1-bit film TIFF, and a JSON manifest by default, with optional full-size continuous interlaced TIFF.
-- Automatically writes BigTIFF for continuous interlaced output when the file exceeds classic TIFF limits.
-- Uses bundled NumPy and a Windows native accelerator where applicable; no user Python package install is required.
-- Avoids UI stalls by deferring heavy camera-array updates while sliders are dragged.
-- Tracks render progress and can resume from existing output files.
+- 创建可配置的线性光场相机阵列。
+- 使用 Blender 相机 `shift_x` 实现离轴投影。
+- 可视化焦平面和显示深度边界框。
+- 渲染当前帧或动画帧范围内的所有视角。
+- 源视角图支持 `JPG`、`PNG`、连续调 `TIFF`，默认 `JPG quality=95` 用于厂商交付。
+- 支持整像素 PE 交织，不再使用 RGB 子像素交织。
+- 支持只输出连续调交织图，也支持从已有 `interlaced.tif` 单独生成菲林 TIFF。
+- 最终 `film_1bit.tif` 为未压缩 1-bit TIFF，`PhotometricInterpretation=1`，解码语义为 `0=black`、`1=white`。
+- 发布 ZIP 内置 Blender 兼容 NumPy 和 Windows native 加速 DLL，用户不需要手动安装 Python 包。
+- 大图生成在后台线程执行，带进度显示、停止按钮、临时文件清理和错误日志。
 
-## Requirements
+## 安装
 
-- Blender 4.2 LTS or newer.
-- No third-party Python packages are required for the Blender add-on.
-
-## Install
-
-Use the release ZIP asset named like:
+从 GitHub Release 下载：
 
 ```text
-light_field_render-v0.1.18.zip
+light_field_render-v0.1.19.zip
 ```
 
-Then install it in Blender:
+在 Blender 中安装：
 
-1. Open Blender.
-2. Go to `Edit > Preferences > Add-ons`.
-3. Click `Install...`.
-4. Select the release ZIP file.
-5. Enable `Light Field Render`.
-6. Open the 3D Viewport sidebar and use the `光场` tab.
+1. 打开 `Edit > Preferences > Add-ons`。
+2. 点击 `Install...`。
+3. 选择 release ZIP。
+4. 启用 `Light Field Render`。
+5. 在 3D Viewport 右侧栏 `光场` 面板中使用插件。
 
-For development, you can also install the add-on by pointing Blender at the `light_field_plugin/` package in this repository.
+开发模式下也可以直接安装仓库中的 `light_field_plugin/` 包。
 
-## Repository Layout
+## 仓库结构
 
 ```text
-light_field_plugin/      Blender add-on package
-docs/                    User manual and technical notes
-scripts/                 Release packaging scripts
-archive/web_viz/         Archived Three.js visualizer
-utils/                   Auxiliary light-field image utilities and sample data
+light_field_plugin/      Blender 插件包
+docs/                    用户手册、发布说明、技术文档
+scripts/                 打包、集成测试、校准脚本
+tests/                   Python 单元测试
+archive/web_viz/         已归档的 Three.js 可视化工具
+utils/                   辅助工具和样例数据
 ```
 
-## Quick Start
+## 快速开始
 
-1. Enable the add-on in Blender.
-2. Open the 3D Viewport sidebar with `N`.
-3. Select the `光场` tab.
-4. Set camera count, focal plane distance, opening angle, focal length, and sensor width.
-5. Click `创建光场相机`.
-6. If you change camera parameters after creation, click `应用相机参数`.
-7. Preview cameras with the active camera controls.
-8. Set an output directory and output format. The output format selector is labeled `输出格式`.
-9. Run single-frame or animation rendering with `渲染当前帧` or `渲染动画`.
+1. 启用插件后打开 3D Viewport 右侧栏 `光场`。
+2. 设置相机数量、焦平面距离、开角、焦距、传感器宽度。
+3. 点击 `创建光场相机`。
+4. 修改参数后点击 `应用相机参数`，避免拖动滑条时实时重建导致卡顿。
+5. 设置输出路径、输出分辨率和源视角格式，默认建议 `JPG`。
+6. 点击 `渲染当前帧` 或 `渲染动画` 输出 `camera_###.jpg` 序列。
+7. 在 `最终交付输出` 面板设置交付物理尺寸、PPI、PE、角度、偏移和视角顺序。
+8. 根据需要点击 `生成当前帧交付文件`、`只生成连续调交织图` 或 `从交织图生成菲林 TIFF`。
 
-See [docs/USER_MANUAL.md](docs/USER_MANUAL.md) for the full workflow.
+完整说明见 [docs/USER_MANUAL.md](docs/USER_MANUAL.md)。
 
-## Final Delivery Output
+## 最终交付输出
 
-The `最终交付输出` panel separates Blender source-view rendering from the final print/film size. Use the existing `输出分辨率 W/H` for each rendered camera view, then set the customer delivery size with:
+源视角渲染分辨率和最终交付尺寸是分离的：
 
-- `交付宽度 mm`
-- `交付高度 mm`
-- `PPI`
+- `输出分辨率 W/H` 控制每张 `camera_###.jpg` 的尺寸。
+- `交付宽度 mm`、`交付高度 mm`、`PPI` 控制最终交织/菲林文件尺寸。
+- 最终像素尺寸为 `round(mm / 25.4 * PPI)`。
 
-The add-on calculates the final pixel size as `round(mm / 25.4 * PPI)`. `生成当前帧交付文件` renders or reuses the current frame source views, interlaces them with the PE/Angle/Offset parameters, and writes the final film-delivery files:
+典型输出目录：
 
 ```text
 output_path/
+  frame_0001/
+    camera_000.jpg
+    camera_001.jpg
+    ...
   delivery/
     frame_0001/
       interlaced.tif
       interlaced_preview.png
       film_1bit.tif
       delivery_manifest.json
+      halftone_calibration_report.json
 ```
 
-`interlaced.tif` is optional and disabled by default for large-delivery speed. Leave `输出连续调 interlaced.tif` off when the factory only needs the final 1-bit film TIFF plus preview; enable it when a continuous-tone interlaced BigTIFF is needed for debugging or vendor handoff.
+按钮语义：
 
-Use `只生成连续调交织图` when you only need the continuous-tone interlaced image. That button writes `interlaced.tif`, `interlaced_preview.png`, and `delivery_manifest.json`, and it intentionally skips halftoning and `film_1bit.tif`.
+- `生成当前帧交付文件`：渲染或复用当前帧源视角图，执行交织和挂网，输出 `film_1bit.tif`、预览图和 manifest。是否写 `interlaced.tif` 由 `输出连续调 interlaced.tif` 控制。
+- `只生成连续调交织图`：只输出 `interlaced.tif`、`interlaced_preview.png`、`delivery_manifest.json`，并删除该帧目录下过期的 `film_1bit.tif`。
+- `从交织图生成菲林 TIFF`：读取已有未压缩 RGB `interlaced.tif`，使用固定 `LBY_row_threshold_v1` profile 生成 `film_1bit.tif` 和 `halftone_calibration_report.json`，不重新渲染、不重新交织。
+- `停止交付生成`：请求后台任务停止，清理 `.tmp` 文件并恢复 UI 状态。
 
-Use `从交织图生成菲林 TIFF` when `interlaced.tif` already exists and you want a strictly separated halftone pass. This reads the existing uncompressed RGB `interlaced.tif`, applies the fixed `LBY_approx_am_diamond_v1` profile, writes `film_1bit.tif`, and writes `halftone_calibration_report.json`. If `校准目标 TIFF` is set, the report includes a streaming 1-bit TIFF comparison against the vendor target.
+大图连续调 `interlaced.tif` 会自动使用 BigTIFF。例如 `194 x 345 mm @ 4000 PPI` 约为 `30551 x 54331` 像素，RGB 连续调 TIFF 约 5 GB，经典 TIFF 无法容纳。
 
-This avoids forcing Blender to render every camera at the final print resolution.
+## v0.1.19 交付语义
 
-For very large delivery sizes, the add-on switches `interlaced.tif` to BigTIFF automatically. For example, `194 x 345 mm @ 4000 PPI` is about `30551 x 54331` pixels, so the RGB continuous TIFF is roughly 5 GB and cannot be represented by classic TIFF.
+- 源视角默认输出 `JPG`，文件名为 `camera_000.jpg`、`camera_001.jpg` 等。
+- JPG 渲染会临时使用 Blender `Standard` color management，完成后恢复原场景设置。
+- Native 快速路径直接读取磁盘 JPG，不在 UI 主线程做 JPG 到 PNG 的临时转换。
+- 交织为整像素交织：每个最终 RGB 像素选择一个源视角，并复制完整 RGB 值。
+- PE 按物理线数解释，输出周期为 `PPI / PE`。
+- 最终打印算法只暴露 `LBY 行阈值屏`。
+- `LBY_row_threshold_v1` 是固定、全局、可解释的 18 px 水平行阈值屏，不包含针对单个输入文件的像素拷贝或特殊分支。
+- 拟合参数：period `18 px`，Y phase `0`，gamma `0.25`，density `0.25`，bias `-0.05`，固定 18 项 row threshold table。
+- 对 `618空间_dats_dats.tif` 的全尺寸验证：目标尺寸 `30551 x 54342`，global mismatch `1.6745%`，target-active mismatch `3.7562%`，target-active mask 为 LBY 黑像素膨胀 32 px。
+- 150 张 `2160 x 3651` JPG、`4000 PPI`、`PE=52.64`、反转视角顺序的 native 全流程本次实测生成时间约 `18.55s`。
 
-The large-delivery path has been stress-tested with 150 JPG source views at `2160 x 3651`, `30551 x 54342` final pixels, `4000 PPI`, `PE=52.64`, reversed view order, and the native `LBY-like近似` path. The current Windows build decodes JPG directly with WIC in the background worker, then generates `film_1bit.tif`, preview, and manifest in about `12.5s` total on the test workstation.
+## 构建 Release ZIP
 
-### v0.1.18 Delivery Semantics
-
-- Source-view output defaults to `JPG` at quality `95`; file names are `camera_000.jpg`, `camera_001.jpg`, and so on.
-- JPG source rendering temporarily forces Blender color management to `Standard` and restores the original scene settings after rendering.
-- Final delivery reads those disk JPG files directly through the native Windows decoder before interlacing, so the UI no longer needs to convert JPGs to temporary PNGs on the main thread.
-- Interlacing is whole-pixel: one final RGB pixel is selected from one source view, then copied to all RGB channels. The PE period is calculated as `PPI / PE`.
-- `film_1bit.tif` uses uncompressed 1-bit TIFF with `PhotometricInterpretation=1`, so decoded pixels follow `0=black` and `1=white`.
-- The exposed print algorithm is `LBY-like近似`. It is a deterministic whole-pixel interlace plus AM diamond clustered-dot screen. It is intended to produce real 1-bit dots instead of the previous single-threshold line-art output. It remains an approximation, not a bitwise clone of the factory RIP.
-- The stable production workflow is now explicit: `只生成连续调交织图` creates the continuous RGB intermediate, and `从交织图生成菲林 TIFF` converts that intermediate into the final 1-bit film TIFF using the same fixed profile.
-
-## Build Release ZIP
-
-From the repository root:
+从仓库根目录执行：
 
 ```powershell
 .\scripts\build_release.ps1
 ```
 
-By default the release script attempts to bundle Blender's compatible NumPy under `light_field_plugin/_vendor/` inside the ZIP so users do not need to install Python packages manually. Use `-NoBundleNumpy` only for a slim development ZIP.
+输出文件位于 `dist/`，用于 GitHub Release asset 和 Blender 插件安装。默认会把 Blender 兼容 NumPy 和 Windows native DLL 打包进 ZIP；只有开发调试时才建议使用 `-NoBundleNumpy`。
 
-The output will be written to `dist/` and is suitable for GitHub Releases and Blender add-on installation.
+## 归档 Web 可视化工具
 
-## Archived Web Visualizer
-
-The old browser-based Three.js visualizer is retained at `archive/web_viz/`. To run it:
+旧浏览器版 Three.js 可视化工具位于 `archive/web_viz/`：
 
 ```powershell
 cd archive\web_viz
 python -m http.server 8000
 ```
 
-Then open `http://localhost:8000`.
+然后打开 `http://localhost:8000`。
 
 ## License
 
-No license file is currently included. Add a `LICENSE` file before public distribution if this project should have explicit open-source licensing terms.
+当前仓库没有独立 `LICENSE` 文件。公开分发前如需明确开源协议，应补充 license。

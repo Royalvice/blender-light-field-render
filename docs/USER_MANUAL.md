@@ -1,269 +1,210 @@
-# Light Field Render User Manual
+# Light Field Render 用户手册
 
-This manual describes how to install and use the `Light Field Render` Blender add-on.
+本文档对应 `Light Field Render v0.1.19`，目标 Blender 版本为 4.2 LTS。
 
-## 1. Installation
+## 1. 安装
 
-Download the add-on ZIP from the GitHub Release page. The file should be named like:
+下载 GitHub Release 中的插件 ZIP：
 
 ```text
-light_field_render-v0.1.18.zip
+light_field_render-v0.1.19.zip
 ```
 
-Install it in Blender:
+安装步骤：
 
-1. Open Blender 4.2 LTS or newer.
-2. Open `Edit > Preferences > Add-ons`.
-3. Click `Install...`.
-4. Select the ZIP file.
-5. Enable `Light Field Render`.
-6. Open the 3D Viewport sidebar with `N`.
-7. Use the `光场` tab.
+1. 打开 Blender。
+2. 进入 `Edit > Preferences > Add-ons`。
+3. 点击 `Install...`。
+4. 选择 `light_field_render-v0.1.19.zip`。
+5. 勾选启用 `Light Field Render`。
+6. 在 3D Viewport 右侧栏打开 `光场` 面板。
 
-## 2. Main Concepts
+插件 ZIP 已包含 Windows native 加速 DLL 和 Blender 兼容 NumPy，普通用户不需要安装 Python 包。
 
-The add-on creates a row of cameras for light-field rendering. All cameras are arranged linearly and use off-axis projection so that their frustums converge on a shared focal plane.
+## 2. 面板概览
 
-Important terms:
+主要面板：
 
-- `相机数量`: total number of views in the light-field camera array.
-- `焦平面距离`: distance from the camera array to the focal plane.
-- `阵列张角`: angular coverage of the camera array.
-- `景深范围`: visual depth volume around the focal plane.
-- `焦距`: Blender camera lens focal length in millimeters.
-- `传感器宽度`: Blender camera sensor width in millimeters.
-- `输出分辨率`: output resolution for each rendered view.
-- `输出格式`: `JPG`, `PNG`, continuous `TIFF`, or halftoned `1-bit 菲林 TIFF`.
-- `最终交付输出`: current-frame delivery workflow that uses physical size in mm plus PPI to generate final interlaced files.
-- `交付宽度` / `交付高度` / `PPI`: customer delivery size. Final pixels are calculated as `round(mm / 25.4 * PPI)`.
+- `光场相机`：创建和管理线性光场相机阵列。
+- `输出设置`：设置源视角图的输出路径、输出格式、渲染分辨率和 JPG 质量。
+- `渲染控制`：渲染当前帧或动画。
+- `1-bit 菲林 TIFF`：设置最终 print TIFF 的挂网参数。
+- `最终交付输出`：按物理尺寸和 PPI 生成最终交织/菲林交付文件。
 
-## 3. Creating A Camera Array
+## 3. 创建光场相机
 
-1. Open the `光场` tab in the 3D Viewport sidebar.
-2. Set the physical geometry parameters.
-3. Set camera intrinsics.
-4. Click `创建光场相机`.
+基础流程：
 
-After the camera system exists, slider edits are intentionally lightweight. They mark the camera array as changed, but they do not rebuild or update every camera on every mouse movement. Click `应用相机参数` to apply the pending camera geometry and intrinsic changes. This avoids UI stalls while dragging sliders such as focal length, focal distance, opening angle, or camera count.
+1. 设置 `相机数量`。
+2. 设置 `焦平面距离`、`开角`、`焦距`、`传感器宽度`。
+3. 点击 `创建光场相机`。
+4. 如后续拖动参数，拖动结束后点击 `应用相机参数`。
 
-The add-on creates:
+插件默认不会在滑条拖动中实时重建相机阵列，以避免 Blender UI 卡死。需要实时应用时可启用 `拖动结束后自动应用`，但大相机数量场景不建议开启。
 
-- A `LightField_Control` empty object.
-- A focal-plane helper object.
-- A display-depth helper object.
-- A camera array named with the `LF_Camera_` prefix.
+## 4. 源视角渲染
 
-The helper objects are visualization aids and are not intended to be rendered.
+源视角是厂商或交付流程中使用的 `camera_###` 序列图。
 
-## 4. Previewing Views
+推荐设置：
 
-After the camera system is created, use the preview controls in the add-on panel:
+- `输出格式`: `JPG`
+- `JPG 质量`: `95`
+- `输出分辨率 W/H`: 每张源视角图的像素尺寸，例如 `2160 x 3651`
 
-- Select an active camera index.
-- Jump to first or last camera.
-- Step to previous or next camera.
-
-The active camera becomes the scene camera.
-
-## 5. Rendering A Single Frame
-
-1. Set the scene to the target frame.
-2. Set the output directory.
-3. Set output resolution.
-4. Select output format.
-5. Click the single-frame render button.
-
-The add-on renders all cameras for the current frame. Output is grouped by frame:
+输出结构：
 
 ```text
-light_field_output/
+output_path/
   frame_0001/
     camera_000.jpg
     camera_001.jpg
     ...
 ```
 
-If rendering is interrupted, the add-on checks existing output files and resumes from the first missing camera image.
+`JPG` 渲染会临时把 Blender color management 切到 `Standard`，完成后恢复原场景设置，减少额外 tone mapping 对厂商交付的影响。
 
-The resume check is format-aware. For `1-bit Film TIFF`, an existing `.tif` is only treated as complete if it is actually a 1-bit TIFF, so a previous continuous TIFF render will not be mistaken for a finished film output.
+## 5. 最终交付尺寸
 
-## 6. Rendering Animation
+最终交付尺寸独立于源视角渲染分辨率：
 
-1. Set `开始帧` and `结束帧` in the add-on panel.
-2. Set the output directory.
-3. Click the animation render button.
+- `输出分辨率 W/H` 只控制每张源视角图。
+- `交付宽度 mm`、`交付高度 mm`、`PPI` 控制最终交织图和菲林图尺寸。
 
-The add-on renders the selected frame range for each camera. Output is grouped by camera:
+最终像素尺寸计算公式：
 
 ```text
-light_field_output/
-  camera_000/
-    frame_0001.jpg
-    frame_0002.jpg
-    ...
-  camera_001/
-    frame_0001.jpg
-    frame_0002.jpg
-    ...
+width_px  = round(width_mm  / 25.4 * ppi)
+height_px = round(height_mm / 25.4 * ppi)
 ```
 
-## 7. Output Formats
+例如 `194 x 345 mm @ 4000 PPI` 会生成约 `30551 x 54331` 像素的交付图。若需要严格匹配已有厂商样张高度 `54342`，应使用对应的物理高度 `345.0717 mm`。
 
-The add-on supports these output modes:
+## 6. 交织参数
 
-- `JPG`: standard continuous-tone JPEG image output, default for vendor handoff source views.
-- `PNG`: standard continuous-tone PNG image output.
-- `TIFF`: standard continuous-tone TIFF output written by Blender.
-- `1-bit 菲林 TIFF`: renders a temporary continuous PNG source, converts it to a black/white halftoned 1-bit TIFF, and deletes the temporary source unless `保留连续调源图` is enabled.
+最终交织使用整像素交织：
 
-For `1-bit 菲林 TIFF`, the output is a single-channel 1-bit TIFF intended for film/RIP workflows that need pure black/white dots instead of continuous tone. The TIFF writer stores `BitsPerSample=1`, `SamplesPerPixel=1`, `Compression=none`, and inch-based DPI metadata.
+- 每个输出 RGB 像素只来自一个源视角。
+- 不再把 R/G/B 子像素分别分配给不同视角。
+- PE 按物理线数处理，输出周期为 `PPI / PE`。
 
-Legacy standalone film halftone controls remain available for render-format compatibility:
+参数：
 
-- `AM / 聚集网点`: traditional clustered dots controlled by `DPI`, `LPI`, screen angle, and dot shape.
-- `FM / 误差扩散`: dispersed fixed-size dots.
-- `DPI`: output resolution metadata and AM cell-size basis.
-- `LPI`: AM screen ruling, used only in AM mode.
-- `网角`: AM screen angle in degrees.
-- `网点形状`: round, diamond, or ellipse in AM mode.
-- `Gamma`: luminance correction before halftoning.
+- `PE`: 光栅/交织线数参数。
+- `Angle`: 交织角度，单位度。
+- `Offset`: 相位偏移。
+- `反转视角顺序`: 将 view 0 映射到最后一张源视角，用于匹配当前厂商样张。
 
-The final delivery panel exposes only `LBY-like近似` for the print TIFF workflow.
+## 7. 1-bit 菲林 TIFF
 
-## 8. Final Delivery Output
+最终 `film_1bit.tif` 是单通道 1-bit 黑白 TIFF：
 
-The `最终交付输出` panel is for the print/film deliverable. It is intentionally separate from Blender's source-view render resolution:
+- `BitsPerSample=1`
+- `SamplesPerPixel=1`
+- `Compression=none`
+- `PhotometricInterpretation=1`
+- 解码语义为 `0=black`、`1=white`
 
-- `输出分辨率 W/H` controls each `camera_###.jpg` or `camera_###.png` source view rendered by Blender.
-- `交付宽度 mm`, `交付高度 mm`, and `PPI` control the final interlaced delivery pixel size.
+v0.1.19 的最终打印算法只暴露 `LBY 行阈值屏`：
 
-For example, `210 mm x 297 mm @ 300 PPI` produces approximately `2480 x 3508` final pixels. Blender does not need to render every camera at that final size; the add-on resamples the source views during interlacing.
+- `线周期 px`: 行阈值屏垂直周期，默认 `18`。
+- `Y 相位 px`: Y 方向相位，默认 `0`。
+- `密度`: 全局暗度倍率，默认 `0.25`。
+- `Gamma`: tone response，默认 `0.25`。
 
-Workflow:
+固定 profile 名称为 `LBY_row_threshold_v1`。它是从 150 张 JPG 输入和厂商 1-bit TIFF 输出 pair 中拟合得到的全局、确定性、可解释算法，不包含针对单张图片的特殊硬编码。
 
-1. Set the normal camera-array and source-view render settings.
-2. In `最终交付输出`, enter `交付宽度 mm`, `交付高度 mm`, and `PPI`.
-3. Set interlace parameters:
-   - `PE`: original PE formula parameter from the existing interlace workflow.
-   - `Angle (°)`: interlace angle in degrees; the add-on converts it to radians internally.
-   - `Offset`: original formula offset.
-   - `反转视角顺序`: maps view 0 to `camera_N-1` when enabled.
-4. Use `生成当前帧交付文件` when you need the print TIFF; this writes `film_1bit.tif`.
-5. Use `只生成连续调交织图` when you only need the continuous-tone interlaced TIFF and do not want halftoning.
-6. Use `从交织图生成菲林 TIFF` when `interlaced.tif` already exists and you want to run only the halftone pass. This does not render source views and does not redo interlacing.
+## 8. 最终交付按钮
 
-The output folder is:
+输出目录：
 
 ```text
-light_field_output/
-  frame_0001/
-    camera_000.jpg
-    camera_001.jpg
-    ...
+output_path/
   delivery/
     frame_0001/
-      interlaced.tif              # optional
+      interlaced.tif
       interlaced_preview.png
       film_1bit.tif
       delivery_manifest.json
+      halftone_calibration_report.json
 ```
 
-Files:
+按钮说明：
 
-- `interlaced.tif`: optional full-size continuous-tone 8-bit RGB TIFF, uncompressed, with PPI written as TIFF DPI metadata. If the RGB image exceeds classic TIFF limits, this file is written as BigTIFF automatically. Enable `输出连续调 interlaced.tif` only when the factory or debugging workflow needs the continuous-tone interlaced image.
-- `interlaced_preview.png`: quick preview PNG with max edge 2048px.
-- `film_1bit.tif`: full-size single-channel 1-bit black/white TIFF using the `LBY-like近似` delivery halftone.
-- `delivery_manifest.json`: records plugin version, frame, mm/PPI/pixel size, source resolution, camera count, interlace parameters, halftone parameters, warnings, file names, and elapsed time.
-- `halftone_calibration_report.json`: written by `从交织图生成菲林 TIFF`; records the input RGB TIFF metadata, the fixed halftone profile, output black ratio, elapsed time, and optional comparison against `校准目标 TIFF`.
+- `生成当前帧交付文件`：渲染或复用当前帧源视角图，执行交织和挂网，输出最终交付文件。
+- `只生成连续调交织图`：只输出 `interlaced.tif`、`interlaced_preview.png` 和 `delivery_manifest.json`，不输出 `film_1bit.tif`。
+- `从交织图生成菲林 TIFF`：读取已有 `interlaced.tif`，只执行挂网，输出 `film_1bit.tif` 和 `halftone_calibration_report.json`。
+- `停止交付生成`：请求后台生成任务停止，清理临时文件，并让 UI 回到可操作状态。
 
-`只生成连续调交织图` writes only `interlaced.tif`, `interlaced_preview.png`, and `delivery_manifest.json`; it removes stale `film_1bit.tif` from that frame folder so the output set is unambiguous.
+建议工作流：
 
-`从交织图生成菲林 TIFF` requires an existing uncompressed RGB `interlaced.tif` generated by this add-on. Unsupported compression, tiled TIFFs, unknown photometric modes, or missing files are treated as errors instead of falling back to another path.
+1. 先生成源视角 JPG 并检查左、中、右视角。
+2. 点击 `只生成连续调交织图`，检查 `interlaced_preview.png`。
+3. 点击 `从交织图生成菲林 TIFF`，单独检查挂网结果。
+4. 流程稳定后再使用 `生成当前帧交付文件` 一步完成。
 
-Safety behavior:
+## 9. 大图和性能
 
-- If source view images already exist and match the current camera count, source format, and source resolution, they are reused.
-- If source view images are missing, they are rendered before interlacing.
-- If camera or output settings are dirty, the add-on applies them and rerenders source views.
-- If the final output exceeds 100 megapixels, `确认生成大图` must be checked.
-- Very large deliverables can still take a long time if `输出连续调 interlaced.tif` is enabled. `194 x 345 mm @ 4000 PPI` is about `30551 x 54331` pixels, roughly 5 GB for the continuous RGB TIFF alone, so the add-on uses BigTIFF and reports row progress while writing.
-- Release ZIPs bundle Blender-compatible NumPy and the Windows native accelerator by default. If both are available, zero-degree LBY-like delivery uses the native path for high-resolution film output. The native accelerator uses Windows system threads and does not require Visual Studio, OpenMP, or `VCOMP140.DLL` on the user machine.
-- If the final output is more than 2x larger than the source-view resolution on either axis, the panel warns that clarity may be insufficient.
-- Failed or stopped generation removes temporary `.tmp` files and writes `delivery_error.log`.
+大图注意事项：
 
-## 9. Recommended Workflow
+- 超过 100MP 的最终输出需要勾选 `确认生成大图`。
+- 连续调 `interlaced.tif` 可能非常大，超过 classic TIFF 限制时会自动写 BigTIFF。
+- 如果厂商只需要最终 `film_1bit.tif`，建议关闭 `输出连续调 interlaced.tif`，节省磁盘和时间。
+- native 快速路径适用于 zero-degree LBY 行阈值屏交付，使用 Windows 系统线程，不要求用户安装 Visual Studio、OpenMP 或 `VCOMP140.DLL`。
 
-1. Test with a small camera count such as `5` or `9`.
-2. Verify that the focal plane and depth helper volume match the target scene.
-3. Render a low-resolution single frame.
-4. Check left, center, and right views.
-5. If final delivery output is required, test `最终交付输出` with a small physical size and low PPI first.
-6. Increase camera count and resolution.
-7. Generate the final current-frame delivery files.
+已验证大图参数：
 
-## 10. v0.1.18 Factory Delivery Workflow
+```text
+source views: 150 JPG, 2160 x 3651
+final size:   30551 x 54342
+ppi:          4000
+PE:           52.64
+view order:   reversed
+generation:   18.55s native direct generation on validation workstation
+```
 
-Use this workflow when matching the current vendor handoff:
+## 10. v0.1.19 LBY 验证结果
 
-1. Set source-view output format to `JPG`.
-2. Keep `JPG 质量` at the default `95` unless the factory explicitly requests another value.
-3. Render or generate delivery from the current frame. Source views are written as `frame_0001/camera_000.jpg` through `camera_149.jpg` for a 150-view setup.
-4. Use `只生成连续调交织图` when you only need `interlaced.tif`, `interlaced_preview.png`, and `delivery_manifest.json`.
-5. Use `从交织图生成菲林 TIFF` to convert the existing `interlaced.tif` into `film_1bit.tif` with the fixed profile and a calibration report.
-6. Use `生成当前帧交付文件` only when you want the render/interlace/halftone steps in one command.
+对厂商目标 `618空间_dats_dats.tif` 的全尺寸验证：
 
-Current delivery rules:
+```text
+target size:            30551 x 54342
+global mismatch:        1.6745%
+target-active mismatch: 3.7562%
+active mask:            target black pixels dilated by 32 px
+generated black ratio:  15.55%
+target black ratio:     15.31%
+```
 
-- JPG output temporarily uses Blender `Standard` color management, then restores the scene's original view settings.
-- Final delivery reads the disk JPG source views through the native Windows decoder, not hidden in-memory render buffers and not a slow UI-thread JPG-to-PNG conversion step.
-- Interlacing is whole-pixel. One output pixel chooses one source view; RGB subpixels are no longer assigned to separate views.
-- PE is interpreted as a physical line count: the output period in pixels is `PPI / PE`.
-- The only exposed print algorithm is `LBY-like近似`.
-- `film_1bit.tif` is uncompressed 1-bit TIFF with `PhotometricInterpretation=1`, meaning decoded pixels are `0=black` and `1=white`.
-- `LBY-like近似` currently uses a deterministic AM diamond clustered-dot screen fitted from the available 150 JPG -> 1-bit TIFF factory pair. It fixes the previous mostly-white output and is closer to a real RIP-style dot screen, but it is still an approximation and not a bitwise clone of the factory algorithm.
-- The fitted screen parameters are recorded in `delivery_manifest.json`: `65 LPI`, `75°`, `gamma=2.0`, `density_scale=2.5`, phase X `20.512820512820515`, phase Y `41.02564102564103`, dot shape `DIAMOND`.
-- The fixed profile is named `LBY_approx_am_diamond_v1`. It is a global, deterministic, explainable AM screen profile and does not contain image-specific special cases.
+这不是 bitwise clone，也不是按输入图片作弊的逐像素复制。它是稳定的行阈值屏近似算法，目标是给菲林打印提供可解释、可复现、误差小于 5% active mismatch 的挂网流程。
 
-## 11. Troubleshooting
+## 11. 错误处理
 
-If the add-on panel is not visible:
+插件会显式失败而不是静默兜底：
 
-- Confirm the add-on is enabled in Blender preferences.
-- Open the 3D Viewport sidebar with `N`.
-- Look for the `光场` tab.
+- 不支持的 TIFF 压缩或 tiled TIFF 会报错。
+- 缺少源视角图时会按当前设置重新渲染。
+- 大图未确认时会拒绝生成。
+- 停止或失败时会删除 `.tmp` 临时文件。
+- 失败详情写入 `delivery_error.log`。
 
-If rendering does not start:
+## 12. 发布和开发
 
-- Create the light-field camera system first.
-- Check that the output path is valid.
-- Confirm that another render task is not already running.
+构建 release ZIP：
 
-If output files are incomplete:
+```powershell
+.\scripts\build_release.ps1
+```
 
-- Re-run the same render command.
-- The add-on will resume from the first missing camera output.
+基础测试：
 
-If the active camera does not change:
+```powershell
+python -m compileall -q light_field_plugin scripts\calibrate_lby_linescreen.py scripts\blender_integration_test.py
+python -m unittest discover -s tests -v
+```
 
-- Confirm the camera array exists.
-- Recreate the light-field camera system if Blender undo/redo removed helper objects.
+Blender 集成测试：
 
-If changing width or height appears not to affect Blender scene settings:
-
-- Click `应用输出设置`, or start a render. The render operators always apply `宽度` and `高度` before rendering.
-- Width and height are stored independently and are no longer coupled through a live update callback.
-
-If slider dragging feels delayed:
-
-- This is intentional. Heavy camera-array updates are deferred. Click `应用相机参数`, or enable `拖动结束后自动应用` if you want delayed automatic application.
-
-If final delivery generation is refused:
-
-- Check that `交付宽度 mm`, `交付高度 mm`, and `PPI` are all greater than zero.
-- If the final output exceeds 100 megapixels, enable `确认生成大图`.
-- Check `delivery_error.log` inside the delivery frame folder for the detailed failure.
-
-If final delivery looks soft:
-
-- Increase the normal `输出分辨率 W/H` for source views.
-- The final delivery stage can resample source views to a larger size, but it cannot create detail that was not rendered by Blender.
+```powershell
+blender --background --factory-startup --python scripts\blender_integration_test.py
+```

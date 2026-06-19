@@ -28,7 +28,7 @@ Use this checklist when publishing a GitHub Release.
 4. Run Blender integration tests if Blender is installed:
 
    ```powershell
-   blender --background --python scripts\blender_integration_test.py
+   blender --background --factory-startup --python scripts\blender_integration_test.py
    ```
 
 5. Build the add-on ZIP:
@@ -39,48 +39,48 @@ Use this checklist when publishing a GitHub Release.
 
 6. Install the generated ZIP in Blender.
 7. Confirm the add-on enables successfully.
-8. Create a small camera array and render PNG, continuous TIFF, and 1-bit Film TIFF outputs.
-9. Generate current-frame final delivery output and verify `interlaced_preview.png`, `film_1bit.tif`, and `delivery_manifest.json`. If `输出连续调 interlaced.tif` is enabled, also verify `interlaced.tif`.
+8. Create a small camera array and render JPG source views, continuous interlaced TIFF, and 1-bit Film TIFF outputs.
+9. Generate current-frame final delivery output and verify `interlaced_preview.png`, `film_1bit.tif`, and `delivery_manifest.json`. If continuous interlaced TIFF output is enabled, also verify `interlaced.tif`.
+10. For LBY validation releases, compare the generated 1-bit TIFF against the vendor target with the target-active mask metric before publishing.
 
 ## GitHub Release
 
 Recommended tag format:
 
 ```text
-v0.1.18
+v0.1.19
 ```
 
 Recommended title:
 
 ```text
-Light Field Render v0.1.18
+Light Field Render v0.1.19
 ```
 
 Release asset:
 
 ```text
-dist/light_field_render-v0.1.18.zip
+dist/light_field_render-v0.1.19.zip
 ```
 
 Suggested release notes:
 
 ```markdown
-## Light Field Render v0.1.18
+## Light Field Render v0.1.19
 
-Separated profile-based halftone workflow and calibration reports.
+Replaces the previous AM diamond LBY approximation with `LBY_row_threshold_v1`, a deterministic 18 px horizontal row-threshold screen fitted against the available factory TIFF target.
 
 ### Features
 
-- Adds explicit `LBY_approx_am_diamond_v1` halftone profile metadata for the LBY-like AM diamond screen.
-- Adds `从交织图生成菲林 TIFF`: reads an existing add-on generated `interlaced.tif`, applies the fixed profile, and writes `film_1bit.tif` without rerendering or reinterlacing.
-- Adds `halftone_calibration_report.json` with input TIFF metadata, profile parameters, output black ratio, elapsed time, and optional target comparison.
-- Adds streaming 1-bit TIFF comparison for vendor targets, reporting shape, mismatch count/ratio, generated black ratio, and target black ratio without loading the whole image into memory.
-- Keeps the hard production boundary: unsupported TIFF compression/layouts fail explicitly instead of falling back silently.
-- Keeps direct delivery generation, JPG source loading, whole-pixel PE interlace, and the native fast path from `v0.1.17`.
-- Full-size direct-JPG test with 150 source views at `2160 x 3651`, final `30551 x 54342`, `4000 PPI`, `PE=52.64`, reversed views: total generation time about `12.5s`.
-- Full-size comparison against `618空间_dats_dats.tif`: mismatch about `10.67%`, generated black ratio about `11.71%`, target black ratio about `15.31%`.
+- Final delivery exposes only the `LBY 行阈值屏` print algorithm in the UI.
+- The fixed profile is `LBY_row_threshold_v1`: period `18 px`, Y phase `0`, gamma `0.25`, density `0.25`, bias `-0.05`, and a fixed 18-entry row threshold table.
+- Keeps whole-pixel PE interlacing, JPG source loading through the native Windows decoder, and uncompressed 1-bit TIFF output with `PhotometricInterpretation=1`.
+- Keeps separated delivery operations: generate final delivery in one command, generate only the continuous interlaced TIFF, or halftone an existing `interlaced.tif`.
+- Full-size direct native generation from 150 JPG views at `2160 x 3651`, final `30551 x 54342`, `4000 PPI`, `PE=52.64`, reversed views: `18.55s` generation time on the validation workstation.
+- Full-size comparison against `618空间_dats_dats.tif`: global mismatch `1.6745%`; target-active mismatch `3.7562%` using a 32 px dilated target-black mask.
+- Generated black ratio is about `15.55%`; target black ratio is about `15.31%`.
 
 ### Installation
 
-Download `light_field_render-v0.1.18.zip`, then install it from Blender via `Edit > Preferences > Add-ons > Install...`.
+Download `light_field_render-v0.1.19.zip`, then install it from Blender via `Edit > Preferences > Add-ons > Install...`.
 ```

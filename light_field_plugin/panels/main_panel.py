@@ -188,20 +188,14 @@ class LIGHTFIELD_PT_film_tiff(Panel):
         col = layout.column(align=True)
         col.prop(props, "film_halftone_method", text="挂网方式")
         col.prop(props, "film_dpi", text="DPI")
+        col.prop(props, "film_line_period_px", text="线周期 px")
+        col.prop(props, "film_line_phase_y", text="Y 相位 px")
+        col.prop(props, "film_line_density", text="密度")
         col.prop(props, "film_gamma", text="Gamma")
-
-        if props.film_halftone_method == "AM":
-            col.prop(props, "film_lpi", text="LPI")
-            col.prop(props, "film_angle", text="网角")
-            col.prop(props, "film_dot_shape", text="网点")
 
         box = layout.box()
         box.label(text="菲林 TIFF 为 1-bit 纯黑白输出。", icon="INFO")
-        box.label(text="大图快速交付推荐 AM，可走 Native 加速。")
-        if props.film_halftone_method == "FM":
-            warn = layout.box()
-            warn.label(text="FM 大图不会走 Native 快速路径。", icon="ERROR")
-            warn.label(text="4000 PPI 可能需要很久；15 秒目标请用 AM。")
+        box.label(text="LBY 行阈值屏：18px 水平周期，可走 Native 加速。")
 
 
 class LIGHTFIELD_PT_delivery_output(Panel):
@@ -261,7 +255,7 @@ class LIGHTFIELD_PT_delivery_output(Panel):
             col.label(text="快速模式：跳过 interlaced.tif")
             col.label(text="输出 interlaced_preview.png 用于检查")
         col.label(text="film_1bit.tif / delivery_manifest.json")
-        col.label(text="1-bit 输出算法：LBY-like近似", icon="INFO")
+        col.label(text="1-bit 输出算法：LBY 行阈值屏", icon="INFO")
         col.prop(props, "delivery_calibration_target_tiff", text="校准目标 TIFF")
 
         layout.separator()

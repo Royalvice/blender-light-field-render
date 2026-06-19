@@ -217,9 +217,9 @@ class LightFieldProperties(PropertyGroup):
 
     film_halftone_method: EnumProperty(
         name="打印 TIFF 算法",
-        description="最终交付 1-bit TIFF 使用的算法；当前只保留 LBY-like 近似",
+        description="最终交付 1-bit TIFF 使用的算法；当前只保留 LBY 行阈值屏",
         items=[
-            ("LBY", "LBY-like近似", "根据刘博阳输入/输出样本反推的近似打印 TIFF 算法"),
+            ("LBY", "LBY 行阈值屏", "根据刘博阳输入/输出样本拟合的 18px 水平行阈值打印 TIFF 算法"),
         ],
         default="LBY",
         update=mark_render_settings_dirty,
@@ -227,7 +227,7 @@ class LightFieldProperties(PropertyGroup):
 
     film_lpi: FloatProperty(
         name="LPI",
-        description="兼容旧参数；LBY-like 主流程不把 PE 当作挂网 LPI",
+        description="兼容旧参数；LBY 行阈值屏主流程不把 PE 当作挂网 LPI",
         default=200.0,
         min=1.0,
         max=1200.0,
@@ -268,9 +268,39 @@ class LightFieldProperties(PropertyGroup):
     film_gamma: FloatProperty(
         name="Gamma",
         description="1-bit 挂网转换前应用的亮度 Gamma 校正",
-        default=1.0,
+        default=0.25,
         min=0.1,
         max=5.0,
+        update=mark_render_settings_dirty,
+    )
+
+    film_line_period_px: FloatProperty(
+        name="线周期 px",
+        description="LBY 行阈值屏的垂直周期，单位为输出像素",
+        default=18.0,
+        min=1.0,
+        max=256.0,
+        precision=3,
+        update=mark_render_settings_dirty,
+    )
+
+    film_line_phase_y: FloatProperty(
+        name="Y 相位 px",
+        description="LBY 行阈值屏在输出 Y 方向的相位偏移",
+        default=0.0,
+        min=-256.0,
+        max=256.0,
+        precision=3,
+        update=mark_render_settings_dirty,
+    )
+
+    film_line_density: FloatProperty(
+        name="密度",
+        description="LBY 行阈值屏的整体暗度倍率；默认值来自 LBY 样张拟合",
+        default=0.25,
+        min=0.01,
+        max=5.0,
+        precision=4,
         update=mark_render_settings_dirty,
     )
 
