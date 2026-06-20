@@ -64,43 +64,51 @@ class HalftonePrintVariant:
     name: str
     filename: str
     algorithm: str
+    family: str
     gamma: float
     density: float
     bias: float
+    threshold_offset: float
     seed: int
     description: str
 
 
 HALFTONE_PRINT_VARIANTS: Tuple[HalftonePrintVariant, ...] = (
     HalftonePrintVariant(
-        name="fm_smooth",
-        filename="film_1bit_fm_smooth.tif",
-        algorithm="deterministic stochastic FM threshold screen",
-        gamma=1.15,
-        density=0.82,
-        bias=0.0,
-        seed=101,
-        description="Smooth midtone FM candidate intended to reduce visible row bands and hard black bars.",
+        name="lby_low_fp",
+        filename="film_1bit_lby_low_fp.tif",
+        algorithm="LBY row-threshold screen with tuned global transfer",
+        family="LBY_TUNED",
+        gamma=0.25,
+        density=0.25,
+        bias=-0.025,
+        threshold_offset=-0.02,
+        seed=0,
+        description="Lower false-positive LBY-tuned candidate; full-size overlap FPR 2.1782%, FNR 2.3465%.",
     ),
     HalftonePrintVariant(
-        name="fm_light",
-        filename="film_1bit_fm_light.tif",
-        algorithm="deterministic stochastic FM threshold screen",
-        gamma=1.35,
-        density=0.72,
+        name="lby_balanced",
+        filename="film_1bit_lby_balanced.tif",
+        algorithm="LBY row-threshold screen with tuned global transfer",
+        family="LBY_TUNED",
+        gamma=0.36,
+        density=0.22,
         bias=0.0,
-        seed=211,
-        description="Lighter FM candidate for checking whether the print transfer curve is currently too dark.",
+        threshold_offset=0.0,
+        seed=0,
+        description="Balanced LBY-tuned candidate; full-size overlap FPR 2.3912%, FNR 1.9260%.",
     ),
     HalftonePrintVariant(
-        name="fm_dense",
-        filename="film_1bit_fm_dense.tif",
-        algorithm="deterministic stochastic FM threshold screen",
-        gamma=0.95,
-        density=0.92,
-        bias=0.0,
-        seed=307,
-        description="Denser FM candidate for bracketing the vendor print density without changing interlace geometry.",
+        name="lby_more_black",
+        filename="film_1bit_lby_more_black.tif",
+        algorithm="LBY row-threshold screen with tuned global transfer",
+        family="LBY_TUNED",
+        gamma=0.16,
+        density=0.32,
+        bias=-0.1,
+        threshold_offset=-0.02,
+        seed=0,
+        description="More-black LBY-tuned candidate; full-size overlap FPR 2.6609%, FNR 1.5937%.",
     ),
 )
 
@@ -269,6 +277,7 @@ class HalftoneSettings:
     line_phase_y: float = LBY_LINE_PHASE_Y
     line_density: float = LBY_LINE_DENSITY
     tone_bias: float = 0.0
+    threshold_offset: float = 0.0
     stochastic_seed: int = 0
 
 
@@ -1156,9 +1165,11 @@ def halftone_variant_to_manifest(variant: HalftonePrintVariant) -> dict:
         "name": variant.name,
         "filename": variant.filename,
         "algorithm": variant.algorithm,
+        "family": variant.family,
         "gamma": variant.gamma,
         "density": variant.density,
         "bias": variant.bias,
+        "threshold_offset": variant.threshold_offset,
         "seed": variant.seed,
         "description": variant.description,
         "photometric_interpretation": 1,
@@ -1173,10 +1184,11 @@ def halftone_variant_output_paths(film_tiff: str) -> Tuple[str, ...]:
 
 def _variant_settings(variant: HalftonePrintVariant) -> HalftoneSettings:
     return HalftoneSettings(
-        method="RIP_FM",
+        method=variant.family,
         gamma=variant.gamma,
         line_density=variant.density,
         tone_bias=variant.bias,
+        threshold_offset=variant.threshold_offset,
         stochastic_seed=variant.seed,
     )
 
@@ -1214,6 +1226,36 @@ def _rip_fm_batch(rgb_batch, y_start: int, variant: HalftonePrintVariant):
     return _pack_black_batch(tone >= thresholds)
 
 
+def _lby_tuned_batch(rgb_batch, y_start: int, variant: HalftonePrintVariant):
+    if _np is None:
+        raise DeliveryError("LBY_TUNED batch generation requires NumPy")
+    rows, _width, _channels = rgb_batch.shape
+    rgb = rgb_batch.astype(_np.float32, copy=False)
+    luma = 0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]
+    darkness = 1.0 - _np.clip(luma / 255.0, 0.0, 1.0)
+    adjusted = _np.clip(
+        float(variant.density) * _np.power(darkness, max(1.0e-6, float(variant.gamma))) + float(variant.bias),
+        0.0,
+        1.0,
+    )
+    phase_rows = _np.arange(y_start, y_start + rows, dtype=_np.float64)
+    period = max(1.0, float(LBY_LIKE_PROFILE.period_px))
+    phases = _np.floor((phase_rows + float(LBY_LIKE_PROFILE.phase_y)) % period).astype(_np.int64)
+    thresholds = _np.asarray(LBY_LIKE_PROFILE.thresholds, dtype=_np.float32)
+    row_thresholds = thresholds[_np.mod(phases, len(LBY_LIKE_PROFILE.thresholds))][:, None]
+    tuned_thresholds = _np.clip(row_thresholds - float(variant.threshold_offset), 0.0, 1.0)
+    return _pack_black_batch(adjusted >= tuned_thresholds)
+
+
+def _halftone_variant_batch(rgb_batch, y_start: int, variant: HalftonePrintVariant):
+    family = (variant.family or "RIP_FM").upper()
+    if family == "LBY_TUNED":
+        return _lby_tuned_batch(rgb_batch, y_start, variant)
+    if family == "RIP_FM":
+        return _rip_fm_batch(rgb_batch, y_start, variant)
+    raise DeliveryError(f"Unsupported halftone variant family: {variant.family}")
+
+
 class StreamingHalftoner:
     def __init__(
         self,
@@ -1242,6 +1284,10 @@ class StreamingHalftoner:
             if _np is not None:
                 return self._process_lby_row_numpy(y, row)
             return self._process_lby_row(y, row)
+        if self._method == "LBY_TUNED":
+            if _np is not None:
+                return self._process_lby_tuned_row_numpy(y, row)
+            return self._process_lby_tuned_row(y, row)
         if self._method == "AM":
             if _np is not None:
                 return self._process_am_row_numpy(y, row)
@@ -1318,6 +1364,42 @@ class StreamingHalftoner:
         period = max(1.0, float(self.settings.line_period_px or profile.period_px))
         screen_phase = int(math.floor((float(y) + float(self.settings.line_phase_y)) % period)) % len(profile.thresholds)
         return adjusted >= float(profile.thresholds[screen_phase])
+
+    def _process_lby_tuned_row(self, y: int, row: bytes) -> List[bool]:
+        profile = self.profile
+        period = max(1.0, float(self.settings.line_period_px or profile.period_px))
+        screen_phase = int(math.floor((float(y) + float(self.settings.line_phase_y)) % period)) % len(profile.thresholds)
+        threshold = max(0.0, min(1.0, float(profile.thresholds[screen_phase]) - float(self.settings.threshold_offset)))
+        gamma = max(1.0e-6, float(self.settings.gamma or profile.gamma))
+        density = float(self.settings.line_density)
+        bias = float(self.settings.tone_bias)
+        black = [False for _ in range(self.width)]
+        for x in range(self.width):
+            offset = x * 3
+            r = row[offset]
+            g = row[offset + 1]
+            b = row[offset + 2]
+            luma = 0.299 * r + 0.587 * g + 0.114 * b
+            darkness = 1.0 - max(0.0, min(1.0, luma / 255.0))
+            adjusted = max(0.0, min(1.0, density * (darkness ** gamma) + bias))
+            black[x] = adjusted >= threshold
+        return black
+
+    def _process_lby_tuned_row_numpy(self, y: int, row: bytes):
+        profile = self.profile
+        rgb = _np.frombuffer(row, dtype=_np.uint8).reshape(self.width, 3).astype(_np.float32)
+        luma = 0.299 * rgb[:, 0] + 0.587 * rgb[:, 1] + 0.114 * rgb[:, 2]
+        darkness = 1.0 - _np.clip(luma / 255.0, 0.0, 1.0)
+        gamma = max(1.0e-6, float(self.settings.gamma or profile.gamma))
+        adjusted = _np.clip(
+            float(self.settings.line_density) * _np.power(darkness, gamma) + float(self.settings.tone_bias),
+            0.0,
+            1.0,
+        )
+        period = max(1.0, float(self.settings.line_period_px or profile.period_px))
+        screen_phase = int(math.floor((float(y) + float(self.settings.line_phase_y)) % period)) % len(profile.thresholds)
+        threshold = max(0.0, min(1.0, float(profile.thresholds[screen_phase]) - float(self.settings.threshold_offset)))
+        return adjusted >= threshold
 
     def _rip_fm_tone(self, darkness: float) -> float:
         return max(
@@ -1977,7 +2059,7 @@ def generate_delivery_outputs(
                         else:
                             bit_writer.write_packed_rows(bit_batch, rows)
                     for variant, _variant_path, variant_writer in variant_writers:
-                        variant_writer.write_packed_rows(_rip_fm_batch(rgb_batch, y, variant), rows)
+                        variant_writer.write_packed_rows(_halftone_variant_batch(rgb_batch, y, variant), rows)
                     now = time.perf_counter()
                     if y == 0 or y + rows >= height_px or now - last_progress_time >= 0.5:
                         last_progress_time = now
@@ -1987,7 +2069,7 @@ def generate_delivery_outputs(
                             y + rows,
                             height_px,
                             f"{y + rows}/{height_px} | Native {native_generator.method}"
-                            + (f" + {len(variant_writers)} FM候选" if variant_writers else ""),
+                            + (f" + {len(variant_writers)} LBY调参候选" if variant_writers else ""),
                         )
             native_used = True
         if not native_used:
@@ -2028,7 +2110,7 @@ def generate_delivery_outputs(
                             y + 1,
                             height_px,
                             f"{y + 1}/{height_px} | Python {(settings.halftone.method or 'FM').upper() if settings.write_film_tiff else 'RGB'}"
-                            + (f" + {len(variant_halftoners)} FM候选" if variant_halftoners else ""),
+                            + (f" + {len(variant_halftoners)} LBY调参候选" if variant_halftoners else ""),
                         )
         preview_width, preview_height = preview_dimensions(width_px, height_px, settings.preview_max_edge)
         _emit_progress(progress_callback, "生成 PNG 预览", 0, preview_height)

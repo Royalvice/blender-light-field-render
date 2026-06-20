@@ -200,6 +200,7 @@ class DeliveryCoreTests(unittest.TestCase):
             )
             self.assertEqual(len(variant_report["halftone_variants"]), len(self.delivery.HALFTONE_PRINT_VARIANTS))
             for variant in self.delivery.HALFTONE_PRINT_VARIANTS:
+                self.assertEqual(variant.family, "LBY_TUNED")
                 variant_path = os.path.join(tmp, variant.filename)
                 self.assertTrue(os.path.exists(variant_path), variant_path)
                 tags = read_tiff_tags(variant_path)
@@ -298,6 +299,10 @@ class DeliveryCoreTests(unittest.TestCase):
                 sorted(variant.filename for variant in self.delivery.HALFTONE_PRINT_VARIANTS),
             )
             self.assertEqual(len(manifest["halftone_variants"]), len(self.delivery.HALFTONE_PRINT_VARIANTS))
+            self.assertEqual(
+                sorted(item["family"] for item in manifest["halftone_variants"]),
+                ["LBY_TUNED"] * len(self.delivery.HALFTONE_PRINT_VARIANTS),
+            )
 
     def test_generate_delivery_outputs_can_skip_interlaced_tiff(self):
         with tempfile.TemporaryDirectory() as tmp:
