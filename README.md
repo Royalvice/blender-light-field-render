@@ -22,7 +22,7 @@
 从 GitHub Release 下载：
 
 ```text
-light_field_render-v0.1.19.zip
+light_field_render-v0.1.20.zip
 ```
 
 在 Blender 中安装：
@@ -93,7 +93,7 @@ output_path/
 
 大图连续调 `interlaced.tif` 会自动使用 BigTIFF。例如 `194 x 345 mm @ 4000 PPI` 约为 `30551 x 54331` 像素，RGB 连续调 TIFF 约 5 GB，经典 TIFF 无法容纳。
 
-## v0.1.19 交付语义
+## v0.1.20 交付语义
 
 - 源视角默认输出 `JPG`，文件名为 `camera_000.jpg`、`camera_001.jpg` 等。
 - JPG 渲染会临时使用 Blender `Standard` color management，完成后恢复原场景设置。
