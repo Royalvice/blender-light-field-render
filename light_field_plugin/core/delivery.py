@@ -16,7 +16,7 @@ import time
 import traceback
 import zlib
 from contextlib import ExitStack
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import BinaryIO, Callable, Iterable, List, Optional, Sequence, Tuple
 
@@ -56,6 +56,52 @@ LBY_LIKE_FIT_NOTE = (
     "whole-pixel PE interlace, reversed view order recommended by vendor pair, "
     "18 px horizontal row-threshold screen fitted on target-active regions from the 150 JPG -> TIFF sample; "
     "full-size target-active mismatch 3.7562% with a 32 px dilated target-black mask"
+)
+
+
+@dataclass(frozen=True)
+class HalftonePrintVariant:
+    name: str
+    filename: str
+    algorithm: str
+    gamma: float
+    density: float
+    bias: float
+    seed: int
+    description: str
+
+
+HALFTONE_PRINT_VARIANTS: Tuple[HalftonePrintVariant, ...] = (
+    HalftonePrintVariant(
+        name="fm_smooth",
+        filename="film_1bit_fm_smooth.tif",
+        algorithm="deterministic stochastic FM threshold screen",
+        gamma=1.15,
+        density=0.82,
+        bias=0.0,
+        seed=101,
+        description="Smooth midtone FM candidate intended to reduce visible row bands and hard black bars.",
+    ),
+    HalftonePrintVariant(
+        name="fm_light",
+        filename="film_1bit_fm_light.tif",
+        algorithm="deterministic stochastic FM threshold screen",
+        gamma=1.35,
+        density=0.72,
+        bias=0.0,
+        seed=211,
+        description="Lighter FM candidate for checking whether the print transfer curve is currently too dark.",
+    ),
+    HalftonePrintVariant(
+        name="fm_dense",
+        filename="film_1bit_fm_dense.tif",
+        algorithm="deterministic stochastic FM threshold screen",
+        gamma=0.95,
+        density=0.92,
+        bias=0.0,
+        seed=307,
+        description="Denser FM candidate for bracketing the vendor print density without changing interlace geometry.",
+    ),
 )
 
 
@@ -222,6 +268,8 @@ class HalftoneSettings:
     line_period_px: float = LBY_LINE_PERIOD_PX
     line_phase_y: float = LBY_LINE_PHASE_Y
     line_density: float = LBY_LINE_DENSITY
+    tone_bias: float = 0.0
+    stochastic_seed: int = 0
 
 
 @dataclass
@@ -241,6 +289,7 @@ class DeliverySettings:
     confirm_large_output: bool = False
     write_interlaced_tiff: bool = True
     write_film_tiff: bool = True
+    write_halftone_variants: bool = False
     source_format: str = "JPG"
 
 
@@ -264,6 +313,7 @@ class DeliveryResult:
     paths: DeliveryPaths
     large_output_warning: bool
     source_upscale_warning: bool
+    variant_film_tiffs: Tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -1101,6 +1151,69 @@ def _hash_u32(value: int) -> int:
     return value & 0xFFFFFFFF
 
 
+def halftone_variant_to_manifest(variant: HalftonePrintVariant) -> dict:
+    return {
+        "name": variant.name,
+        "filename": variant.filename,
+        "algorithm": variant.algorithm,
+        "gamma": variant.gamma,
+        "density": variant.density,
+        "bias": variant.bias,
+        "seed": variant.seed,
+        "description": variant.description,
+        "photometric_interpretation": 1,
+        "black_is_zero": True,
+    }
+
+
+def halftone_variant_output_paths(film_tiff: str) -> Tuple[str, ...]:
+    directory = os.path.dirname(os.path.abspath(film_tiff))
+    return tuple(os.path.join(directory, variant.filename) for variant in HALFTONE_PRINT_VARIANTS)
+
+
+def _variant_settings(variant: HalftonePrintVariant) -> HalftoneSettings:
+    return HalftoneSettings(
+        method="RIP_FM",
+        gamma=variant.gamma,
+        line_density=variant.density,
+        tone_bias=variant.bias,
+        stochastic_seed=variant.seed,
+    )
+
+
+def _stochastic_threshold(value: int) -> float:
+    return ((_hash_u32(value) & 0x00FFFFFF) + 0.5) / float(1 << 24)
+
+
+def _pack_black_batch(black):
+    return _np.packbits(1 - black.astype(_np.uint8), axis=1, bitorder="big")
+
+
+def _rip_fm_batch(rgb_batch, y_start: int, variant: HalftonePrintVariant):
+    if _np is None:
+        raise DeliveryError("RIP_FM batch generation requires NumPy")
+    rows, width, _channels = rgb_batch.shape
+    rgb = rgb_batch.astype(_np.float32, copy=False)
+    luma = 0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]
+    darkness = 1.0 - _np.clip(luma / 255.0, 0.0, 1.0)
+    tone = _np.clip(
+        float(variant.density) * _np.power(darkness, max(1.0e-6, float(variant.gamma))) + float(variant.bias),
+        0.0,
+        1.0,
+    )
+    x = _np.arange(width, dtype=_np.uint32)[None, :]
+    y = (_np.arange(y_start, y_start + rows, dtype=_np.uint32)[:, None] * _np.uint32(0x9E3779B1))
+    seed = _np.uint32((int(variant.seed) * 0x85EBCA6B) & 0xFFFFFFFF)
+    values = x ^ y ^ seed
+    values ^= values >> _np.uint32(16)
+    values *= _np.uint32(0x7FEB352D)
+    values ^= values >> _np.uint32(15)
+    values *= _np.uint32(0x846CA68B)
+    values ^= values >> _np.uint32(16)
+    thresholds = ((values & _np.uint32(0x00FFFFFF)).astype(_np.float32) + 0.5) / float(1 << 24)
+    return _pack_black_batch(tone >= thresholds)
+
+
 class StreamingHalftoner:
     def __init__(
         self,
@@ -1120,6 +1233,7 @@ class StreamingHalftoner:
         self._sin = math.sin(self._angle)
         self._cell = max(2.0, float(self.dpi) / max(1.0, float(settings.lpi)))
         self._x_np = _np.arange(width, dtype=_np.float64) if _np is not None else None
+        self._x_u32_np = _np.arange(width, dtype=_np.uint32) if _np is not None else None
 
     def process_rgb_row(self, y: int, row: bytes) -> List[bool]:
         if len(row) != self.width * 3:
@@ -1132,6 +1246,10 @@ class StreamingHalftoner:
             if _np is not None:
                 return self._process_am_row_numpy(y, row)
             return self._process_am_row(y, row)
+        if self._method == "RIP_FM":
+            if _np is not None:
+                return self._process_rip_fm_row_numpy(y, row)
+            return self._process_rip_fm_row(y, row)
         return self._process_fm_row(row)
 
     def _row_luma_values(self, row: bytes) -> List[float]:
@@ -1200,6 +1318,53 @@ class StreamingHalftoner:
         period = max(1.0, float(self.settings.line_period_px or profile.period_px))
         screen_phase = int(math.floor((float(y) + float(self.settings.line_phase_y)) % period)) % len(profile.thresholds)
         return adjusted >= float(profile.thresholds[screen_phase])
+
+    def _rip_fm_tone(self, darkness: float) -> float:
+        return max(
+            0.0,
+            min(
+                1.0,
+                float(self.settings.line_density) * (max(0.0, min(1.0, darkness)) ** max(1.0e-6, float(self.settings.gamma)))
+                + float(self.settings.tone_bias),
+            ),
+        )
+
+    def _process_rip_fm_row(self, y: int, row: bytes) -> List[bool]:
+        black = [False for _ in range(self.width)]
+        seed = int(self.settings.stochastic_seed)
+        for x in range(self.width):
+            offset = x * 3
+            r = row[offset]
+            g = row[offset + 1]
+            b = row[offset + 2]
+            luma = 0.299 * r + 0.587 * g + 0.114 * b
+            darkness = 1.0 - max(0.0, min(1.0, luma / 255.0))
+            value = x ^ (y * 0x9E3779B1) ^ (seed * 0x85EBCA6B)
+            black[x] = self._rip_fm_tone(darkness) >= _stochastic_threshold(value)
+        return black
+
+    def _process_rip_fm_row_numpy(self, y: int, row: bytes):
+        rgb = _np.frombuffer(row, dtype=_np.uint8).reshape(self.width, 3).astype(_np.float32)
+        luma = 0.299 * rgb[:, 0] + 0.587 * rgb[:, 1] + 0.114 * rgb[:, 2]
+        darkness = 1.0 - _np.clip(luma / 255.0, 0.0, 1.0)
+        tone = _np.clip(
+            float(self.settings.line_density) * _np.power(darkness, max(1.0e-6, float(self.settings.gamma)))
+            + float(self.settings.tone_bias),
+            0.0,
+            1.0,
+        )
+        values = (
+            self._x_u32_np
+            ^ _np.uint32((int(y) * 0x9E3779B1) & 0xFFFFFFFF)
+            ^ _np.uint32((int(self.settings.stochastic_seed) * 0x85EBCA6B) & 0xFFFFFFFF)
+        )
+        values ^= values >> _np.uint32(16)
+        values *= _np.uint32(0x7FEB352D)
+        values ^= values >> _np.uint32(15)
+        values *= _np.uint32(0x846CA68B)
+        values ^= values >> _np.uint32(16)
+        thresholds = ((values & _np.uint32(0x00FFFFFF)).astype(_np.float32) + 0.5) / float(1 << 24)
+        return tone >= thresholds
 
     def _process_am_row(self, y: int, row: bytes) -> List[bool]:
         shape = (self.settings.dot_shape or "ROUND").upper()
@@ -1738,9 +1903,14 @@ def generate_delivery_outputs(
     ]
     if settings.write_film_tiff:
         tmp_files.append(_tmp_path(paths.film_1bit_tiff))
+        if settings.write_halftone_variants:
+            tmp_files.extend(_tmp_path(path) for path in halftone_variant_output_paths(paths.film_1bit_tiff))
     else:
         _remove_if_exists(paths.film_1bit_tiff)
         _remove_if_exists(_tmp_path(paths.film_1bit_tiff))
+        for path in halftone_variant_output_paths(paths.film_1bit_tiff):
+            _remove_if_exists(path)
+            _remove_if_exists(_tmp_path(path))
     if settings.write_interlaced_tiff:
         tmp_files.append(_tmp_path(paths.interlaced_tiff))
     else:
@@ -1770,9 +1940,10 @@ def generate_delivery_outputs(
         _emit_progress(progress_callback, stage, 0, height_px)
         native_used = False
         native_generator = None
+        variant_paths = halftone_variant_output_paths(paths.film_1bit_tiff) if settings.write_film_tiff and settings.write_halftone_variants else ()
         if NativeAmBatchGenerator.can_use(renderer, settings):
             native_generator = NativeAmBatchGenerator(renderer, settings)
-            batch_rows = 1024
+            batch_rows = 256 if variant_paths else 1024
             with ExitStack() as stack:
                 rgb_writer = None
                 if settings.write_interlaced_tiff:
@@ -1784,6 +1955,10 @@ def generate_delivery_outputs(
                     bit_writer = stack.enter_context(
                         OneBitTiffWriter(_tmp_path(paths.film_1bit_tiff), width_px, height_px, settings.ppi)
                     )
+                variant_writers = []
+                for variant, variant_path in zip(HALFTONE_PRINT_VARIANTS, variant_paths):
+                    writer = stack.enter_context(OneBitTiffWriter(_tmp_path(variant_path), width_px, height_px, settings.ppi))
+                    variant_writers.append((variant, variant_path, writer))
                 last_progress_time = 0.0
                 for y in range(0, height_px, batch_rows):
                     _check_stop(stop_callback)
@@ -1791,7 +1966,7 @@ def generate_delivery_outputs(
                     rgb_batch, bit_batch = native_generator.generate(
                         y,
                         rows,
-                        include_rgb=settings.write_interlaced_tiff,
+                        include_rgb=settings.write_interlaced_tiff or bool(variant_writers),
                         include_bits=settings.write_film_tiff,
                     )
                     if rgb_writer is not None:
@@ -1801,6 +1976,8 @@ def generate_delivery_outputs(
                             bit_writer.write_packed_rows(_np.bitwise_xor(bit_batch, 0xFF), rows)
                         else:
                             bit_writer.write_packed_rows(bit_batch, rows)
+                    for variant, _variant_path, variant_writer in variant_writers:
+                        variant_writer.write_packed_rows(_rip_fm_batch(rgb_batch, y, variant), rows)
                     now = time.perf_counter()
                     if y == 0 or y + rows >= height_px or now - last_progress_time >= 0.5:
                         last_progress_time = now
@@ -1809,7 +1986,8 @@ def generate_delivery_outputs(
                             stage,
                             y + rows,
                             height_px,
-                            f"{y + rows}/{height_px} | Native {native_generator.method}",
+                            f"{y + rows}/{height_px} | Native {native_generator.method}"
+                            + (f" + {len(variant_writers)} FM候选" if variant_writers else ""),
                         )
             native_used = True
         if not native_used:
@@ -1824,6 +2002,12 @@ def generate_delivery_outputs(
                     bit_writer = stack.enter_context(
                         OneBitTiffWriter(_tmp_path(paths.film_1bit_tiff), width_px, height_px, settings.ppi)
                     )
+                variant_halftoners = []
+                for variant, variant_path in zip(HALFTONE_PRINT_VARIANTS, variant_paths):
+                    writer = stack.enter_context(OneBitTiffWriter(_tmp_path(variant_path), width_px, height_px, settings.ppi))
+                    variant_halftoners.append(
+                        (variant, variant_path, writer, StreamingHalftoner(width_px, _variant_settings(variant), settings.ppi))
+                    )
                 progress_step = max(1, height_px // 1000)
                 last_progress_time = 0.0
                 for y in range(height_px):
@@ -1833,6 +2017,8 @@ def generate_delivery_outputs(
                         rgb_writer.write_row(row)
                     if bit_writer is not None:
                         bit_writer.write_black_row(halftoner.process_rgb_row(y, row))
+                    for _variant, _variant_path, variant_writer, variant_halftoner in variant_halftoners:
+                        variant_writer.write_black_row(variant_halftoner.process_rgb_row(y, row))
                     now = time.perf_counter()
                     if y % progress_step == 0 or y == height_px - 1 or now - last_progress_time >= 0.5:
                         last_progress_time = now
@@ -1841,9 +2027,9 @@ def generate_delivery_outputs(
                             stage,
                             y + 1,
                             height_px,
-                            f"{y + 1}/{height_px} | Python {(settings.halftone.method or 'FM').upper() if settings.write_film_tiff else 'RGB'}",
+                            f"{y + 1}/{height_px} | Python {(settings.halftone.method or 'FM').upper() if settings.write_film_tiff else 'RGB'}"
+                            + (f" + {len(variant_halftoners)} FM候选" if variant_halftoners else ""),
                         )
-
         preview_width, preview_height = preview_dimensions(width_px, height_px, settings.preview_max_edge)
         _emit_progress(progress_callback, "生成 PNG 预览", 0, preview_height)
 
@@ -1870,6 +2056,7 @@ def generate_delivery_outputs(
             paths=paths,
             large_output_warning=large_warning,
             source_upscale_warning=upscale_warning,
+            variant_film_tiffs=tuple(variant_paths),
         )
         manifest = build_manifest(settings, result, source_paths)
         with open(_tmp_path(paths.manifest_json), "w", encoding="utf-8") as f:
@@ -1879,6 +2066,8 @@ def generate_delivery_outputs(
             os.replace(_tmp_path(paths.interlaced_tiff), paths.interlaced_tiff)
         if settings.write_film_tiff:
             os.replace(_tmp_path(paths.film_1bit_tiff), paths.film_1bit_tiff)
+            for variant_path in variant_paths:
+                os.replace(_tmp_path(variant_path), variant_path)
         os.replace(_tmp_path(paths.preview_png), paths.preview_png)
         os.replace(_tmp_path(paths.manifest_json), paths.manifest_json)
         _remove_if_exists(paths.error_log)
@@ -1965,6 +2154,7 @@ def halftone_interlaced_tiff(
     manifest_json: Optional[str] = None,
     target_tiff: Optional[str] = None,
     calibration_report_json: Optional[str] = None,
+    write_variants: bool = False,
     progress_callback: Optional[ProgressCallback] = None,
     stop_callback: Optional[StopCallback] = None,
 ) -> dict:
@@ -1972,9 +2162,11 @@ def halftone_interlaced_tiff(
     info = read_uncompressed_rgb_tiff_info(interlaced_tiff)
     output_ppi = int(ppi or info.dpi_x or 4000)
     tmp_film = _tmp_path(film_tiff)
+    variant_paths = halftone_variant_output_paths(film_tiff) if write_variants else ()
+    tmp_variants = [_tmp_path(path) for path in variant_paths]
     tmp_manifest = _tmp_path(manifest_json) if manifest_json else None
     tmp_report = _tmp_path(calibration_report_json) if calibration_report_json else None
-    for path in (tmp_film, tmp_manifest, tmp_report):
+    for path in (tmp_film, *tmp_variants, tmp_manifest, tmp_report):
         if path:
             _remove_if_exists(path)
 
@@ -1991,9 +2183,19 @@ def halftone_interlaced_tiff(
         profile=profile,
     )
     total_black = 0
+    variant_reports = []
     try:
         _emit_progress(progress_callback, "读取交织 TIFF 并挂网", 0, info.height, os.path.basename(interlaced_tiff))
-        with OneBitTiffWriter(tmp_film, info.width, info.height, output_ppi) as writer:
+        with ExitStack() as stack:
+            writer = stack.enter_context(OneBitTiffWriter(tmp_film, info.width, info.height, output_ppi))
+            variant_writers = []
+            for variant, variant_path in zip(HALFTONE_PRINT_VARIANTS, variant_paths):
+                variant_writer = stack.enter_context(
+                    OneBitTiffWriter(_tmp_path(variant_path), info.width, info.height, output_ppi)
+                )
+                variant_writers.append(
+                    (variant, variant_path, variant_writer, StreamingHalftoner(info.width, _variant_settings(variant), output_ppi))
+                )
             for y, row in enumerate(iter_tiff_rows(info)):
                 _check_stop(stop_callback)
                 black_row = halftoner.process_rgb_row(y, row)
@@ -2002,8 +2204,18 @@ def halftone_interlaced_tiff(
                 else:
                     total_black += sum(1 for value in black_row if value)
                 writer.write_black_row(black_row)
+                for _variant, _variant_path, variant_writer, variant_halftoner in variant_writers:
+                    variant_writer.write_black_row(variant_halftoner.process_rgb_row(y, row))
                 if y == 0 or y == info.height - 1 or (y + 1) % max(1, info.height // 100) == 0:
                     _emit_progress(progress_callback, "读取交织 TIFF 并挂网", y + 1, info.height)
+
+        for variant, variant_path, _writer, _halftoner in variant_writers:
+            variant_reports.append(
+                {
+                    **halftone_variant_to_manifest(variant),
+                    "path": variant_path,
+                }
+            )
 
         elapsed = time.perf_counter() - start_time
         total_pixels = info.width * info.height
@@ -2032,6 +2244,7 @@ def halftone_interlaced_tiff(
                 "black_ratio": total_black / total_pixels if total_pixels else 0.0,
             },
             "halftone_profile": halftone_profile_to_manifest(profile),
+            "halftone_variants": variant_reports,
             "elapsed_seconds": elapsed,
         }
         if target_tiff:
@@ -2053,6 +2266,8 @@ def halftone_interlaced_tiff(
                 json.dump(report, f, ensure_ascii=False, indent=2)
 
         os.replace(tmp_film, film_tiff)
+        for variant_path in variant_paths:
+            os.replace(_tmp_path(variant_path), variant_path)
         if manifest_json:
             os.replace(tmp_manifest, manifest_json)
         if calibration_report_json:
@@ -2060,7 +2275,7 @@ def halftone_interlaced_tiff(
         _emit_progress(progress_callback, "完成", 1, 1, os.path.dirname(os.path.abspath(film_tiff)))
         return report
     except Exception:
-        for path in (tmp_film, tmp_manifest, tmp_report):
+        for path in (tmp_film, *tmp_variants, tmp_manifest, tmp_report):
             if path:
                 _remove_if_exists(path)
         raise
@@ -2096,6 +2311,7 @@ def build_manifest(settings: DeliverySettings, result: DeliveryResult, source_pa
             "preview_height_px": result.preview_height,
             "write_interlaced_tiff": settings.write_interlaced_tiff,
             "write_film_tiff": settings.write_film_tiff,
+            "write_halftone_variants": settings.write_halftone_variants,
         },
         "source_views": {
             "camera_count": settings.camera_count,
@@ -2115,8 +2331,15 @@ def build_manifest(settings: DeliverySettings, result: DeliveryResult, source_pa
             "interlaced_tiff": os.path.basename(result.paths.interlaced_tiff) if settings.write_interlaced_tiff else None,
             "preview_png": os.path.basename(result.paths.preview_png),
             "film_1bit_tiff": os.path.basename(result.paths.film_1bit_tiff) if settings.write_film_tiff else None,
+            "film_1bit_variants": [
+                os.path.basename(path) for path in result.variant_film_tiffs
+            ] if settings.write_film_tiff and settings.write_halftone_variants else [],
             "manifest_json": os.path.basename(result.paths.manifest_json),
         },
+        "halftone_variants": [
+            halftone_variant_to_manifest(variant)
+            for variant in HALFTONE_PRINT_VARIANTS
+        ] if settings.write_film_tiff and settings.write_halftone_variants else [],
         "elapsed_seconds": result.elapsed_seconds,
     }
 

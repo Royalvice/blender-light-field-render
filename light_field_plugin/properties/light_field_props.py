@@ -389,6 +389,12 @@ class LightFieldProperties(PropertyGroup):
         default=False,
     )
 
+    delivery_write_halftone_variants: BoolProperty(
+        name="输出多版挂网候选",
+        description="除 film_1bit.tif 外，同时输出三张 FM 平滑渐变候选 TIFF，便于一次打印对比",
+        default=True,
+    )
+
     delivery_calibration_target_tiff: StringProperty(
         name="校准目标 TIFF",
         description="可选：厂商返回的 1-bit TIFF；从 interlaced.tif 单独挂网后会生成逐像素校准报告",

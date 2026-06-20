@@ -256,6 +256,9 @@ class LIGHTFIELD_PT_delivery_output(Panel):
             col.label(text="输出 interlaced_preview.png 用于检查")
         col.label(text="film_1bit.tif / delivery_manifest.json")
         col.label(text="1-bit 输出算法：LBY 行阈值屏", icon="INFO")
+        col.prop(props, "delivery_write_halftone_variants", text="输出多版挂网候选")
+        if props.delivery_write_halftone_variants:
+            col.label(text="额外输出 fm_smooth / fm_light / fm_dense", icon="INFO")
         col.prop(props, "delivery_calibration_target_tiff", text="校准目标 TIFF")
 
         layout.separator()

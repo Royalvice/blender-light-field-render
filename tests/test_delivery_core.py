@@ -176,6 +176,7 @@ class DeliveryCoreTests(unittest.TestCase):
             self.assertEqual(report["halftone_profile"]["family"], "ROW_THRESHOLD")
             self.assertEqual(report["film_tiff"]["width_px"], 4)
             self.assertEqual(report["film_tiff"]["height_px"], 2)
+            self.assertEqual(report["halftone_variants"], [])
 
             target = os.path.join(tmp, "target.tif")
             shutil.copyfile(film, target)
@@ -189,6 +190,22 @@ class DeliveryCoreTests(unittest.TestCase):
             self.assertTrue(compared["comparison"]["same_shape"])
             self.assertEqual(compared["comparison"]["mismatch_count"], 0)
             self.assertEqual(compared["comparison"]["mismatch_ratio"], 0.0)
+
+            variant_report = self.delivery.halftone_interlaced_tiff(
+                interlaced,
+                film,
+                ppi=4000,
+                calibration_report_json=report_path,
+                write_variants=True,
+            )
+            self.assertEqual(len(variant_report["halftone_variants"]), len(self.delivery.HALFTONE_PRINT_VARIANTS))
+            for variant in self.delivery.HALFTONE_PRINT_VARIANTS:
+                variant_path = os.path.join(tmp, variant.filename)
+                self.assertTrue(os.path.exists(variant_path), variant_path)
+                tags = read_tiff_tags(variant_path)
+                self.assertEqual(tags[256][2], 4)
+                self.assertEqual(tags[257][2], 2)
+                self.assertEqual(tags[258][2] & 0xFFFF, 1)
 
     def test_generate_delivery_outputs_writes_expected_files_and_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -239,7 +256,48 @@ class DeliveryCoreTests(unittest.TestCase):
             self.assertEqual(manifest["plugin_version"], "0.1.10")
             self.assertEqual(manifest["delivery"]["width_px"], 10)
             self.assertEqual(manifest["delivery"]["height_px"], 5)
+            self.assertFalse(manifest["delivery"]["write_halftone_variants"])
             self.assertEqual(manifest["source_views"]["camera_count"], 3)
+            self.assertEqual(manifest["files"]["film_1bit_variants"], [])
+
+    def test_generate_delivery_outputs_can_write_halftone_variants(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source_paths = []
+            for idx, color in enumerate(((255, 255, 255), (0, 0, 0))):
+                path = os.path.join(tmp, f"camera_{idx:03d}.png")
+                row = bytes(color * 8)
+                self.delivery.write_rgb_png(path, 8, 4, [row, row, row, row])
+                source_paths.append(path)
+
+            settings = self.delivery.DeliverySettings(
+                width_mm=2.54,
+                height_mm=2.54,
+                ppi=100,
+                frame=1,
+                camera_count=2,
+                source_width=8,
+                source_height=4,
+                interlace=self.delivery.InterlaceSettings(pe=16.7240, angle_degrees=0.0, offset=0.0),
+                halftone=self.delivery.HalftoneSettings(method="LBY", gamma=0.25),
+                write_halftone_variants=True,
+            )
+
+            result = self.delivery.generate_delivery_outputs(source_paths, tmp, settings)
+            self.assertEqual(len(result.variant_film_tiffs), len(self.delivery.HALFTONE_PRINT_VARIANTS))
+            for path in result.variant_film_tiffs:
+                self.assertTrue(os.path.exists(path), path)
+                tags = read_tiff_tags(path)
+                self.assertEqual(tags[256][2], 10)
+                self.assertEqual(tags[257][2], 10)
+                self.assertEqual(tags[258][2] & 0xFFFF, 1)
+
+            manifest = json.loads(Path(result.paths.manifest_json).read_text(encoding="utf-8"))
+            self.assertTrue(manifest["delivery"]["write_halftone_variants"])
+            self.assertEqual(
+                sorted(manifest["files"]["film_1bit_variants"]),
+                sorted(variant.filename for variant in self.delivery.HALFTONE_PRINT_VARIANTS),
+            )
+            self.assertEqual(len(manifest["halftone_variants"]), len(self.delivery.HALFTONE_PRINT_VARIANTS))
 
     def test_generate_delivery_outputs_can_skip_interlaced_tiff(self):
         with tempfile.TemporaryDirectory() as tmp:

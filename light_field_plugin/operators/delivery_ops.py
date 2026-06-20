@@ -115,6 +115,7 @@ def _build_delivery_settings(
         confirm_large_output=props.delivery_confirm_large_output,
         write_interlaced_tiff=write_interlaced_tiff,
         write_film_tiff=write_film_tiff,
+        write_halftone_variants=props.delivery_write_halftone_variants,
         source_format="JPG",
     )
 
@@ -655,6 +656,7 @@ class LIGHTFIELD_OT_halftone_interlaced(Operator):
             ppi=self.props.delivery_ppi,
             target_tiff=self._target_tiff(),
             calibration_report_json=report_path,
+            write_variants=self.props.delivery_write_halftone_variants,
             progress_callback=progress_callback,
             stop_callback=self._stop_event.is_set,
         )
