@@ -117,6 +117,11 @@ class DeliveryCoreTests(unittest.TestCase):
             self.assertEqual(tags[273][0], 16)
             self.assertEqual(tags[279][0], 16)
             self.assertEqual(tags[279][2], 6)
+            rgb_info = self.delivery.read_uncompressed_rgb_tiff_info(rgb_tiff)
+            self.assertEqual(rgb_info.bits_per_sample, (8, 8, 8))
+            self.assertEqual(rgb_info.dpi_x, 4000.0)
+            self.assertEqual(rgb_info.dpi_y, 4000.0)
+            self.assertEqual(list(self.delivery.iter_tiff_rows(rgb_info)), [bytes([255, 0, 0, 0, 255, 0])])
 
             bit_tiff = os.path.join(tmp, "bit_big.tif")
             with self.delivery.OneBitTiffWriter(bit_tiff, 9, 1, 4000, force_bigtiff=True) as writer:
@@ -128,6 +133,10 @@ class DeliveryCoreTests(unittest.TestCase):
             self.assertEqual(tags[279][0], 16)
             self.assertEqual(tags[279][2], 2)
             self.assertEqual(tags[262][2] & 0xFFFF, 1)
+            bit_info = self.delivery.read_uncompressed_one_bit_tiff_info(bit_tiff)
+            self.assertEqual(bit_info.bits_per_sample, (1,))
+            self.assertEqual(bit_info.dpi_x, 4000.0)
+            self.assertEqual(bit_info.dpi_y, 4000.0)
 
     def test_lby_halftoner_outputs_deterministic_row_threshold_screen(self):
         halftoner = self.delivery.StreamingHalftoner(

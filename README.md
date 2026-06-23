@@ -22,7 +22,7 @@
 从 GitHub Release 下载：
 
 ```text
-light_field_render-v0.1.22.zip
+light_field_render-v0.1.23.zip
 ```
 
 在 Blender 中安装：
@@ -96,7 +96,7 @@ output_path/
 
 大图连续调 `interlaced.tif` 会自动使用 BigTIFF。例如 `194 x 345 mm @ 4000 PPI` 约为 `30551 x 54331` 像素，RGB 连续调 TIFF 约 5 GB，经典 TIFF 无法容纳。
 
-## v0.1.22 交付语义
+## v0.1.23 交付语义
 
 - 源视角默认输出 `JPG`，文件名为 `camera_000.jpg`、`camera_001.jpg` 等。
 - JPG 渲染会临时使用 Blender `Standard` color management，完成后恢复原场景设置。
@@ -105,6 +105,7 @@ output_path/
 - PE 按物理线数解释，输出周期为 `PPI / PE`。
 - 最终打印算法只暴露 `LBY 行阈值屏`。
 - 默认同时输出三张独立 LBY 行阈值全局调参候选：`film_1bit_lby_low_fp.tif`、`film_1bit_lby_balanced.tif`、`film_1bit_lby_more_black.tif`，用于一次打印对比低误报、平衡、低漏报三种密度曲线。
+- `v0.1.23` 修复连续调 `interlaced.tif` 在 BigTIFF 模式下的 RGB 元数据写法：`BitsPerSample=(8,8,8)` 和 DPI tag 现在按 BigTIFF 规范内联写入，避免查看软件或 Photoshop 把文件判为损坏。
 - `LBY_row_threshold_v1` 是固定、全局、可解释的 18 px 水平行阈值屏，不包含针对单个输入文件的像素拷贝或特殊分支。
 - 拟合参数：period `18 px`，Y phase `0`，gamma `0.25`，density `0.25`，bias `-0.05`，固定 18 项 row threshold table。
 - 对 `618空间_dats_dats.tif` 的全尺寸重叠区域验证：目标尺寸 `30551 x 54342`，插件输出尺寸 `30551 x 54331`，指标按重叠区域 `30551 x 54331` 计算；三张 LBY 调参候选均满足黑像素正类 `FPR <= 3%` 且 `FNR <= 3%`，但仍不是厂商 RIP 的逐像素克隆。

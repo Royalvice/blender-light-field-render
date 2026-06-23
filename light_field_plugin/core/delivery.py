@@ -602,13 +602,15 @@ def _tag_required(tags: dict[int, tuple[int, int, int]], tag: int, path: str) ->
     return tags[tag]
 
 
-def _tiff_short_values(path: str, tags: dict[int, tuple[int, int, int]], tag: int) -> Tuple[int, ...]:
+def _tiff_short_values(path: str, tags: dict[int, tuple[int, int, int]], tag: int, is_bigtiff: bool = False) -> Tuple[int, ...]:
     field_type, count, value = _tag_required(tags, tag, path)
     if field_type != 3:
         raise DeliveryError(f"TIFF tag {tag} must be SHORT: {path}")
-    if count == 1:
-        return (value & 0xFFFF,)
     byte_count = count * 2
+    inline_limit = 8 if is_bigtiff else 4
+    if byte_count <= inline_limit:
+        raw = struct.pack("<Q" if is_bigtiff else "<I", value)[:byte_count]
+        return struct.unpack("<" + "H" * count, raw)
     with open(path, "rb") as f:
         f.seek(value)
         return struct.unpack("<" + "H" * count, _read_exact(f, byte_count))
@@ -625,16 +627,19 @@ def _tiff_single_int(path: str, tags: dict[int, tuple[int, int, int]], tag: int)
     raise DeliveryError(f"Unsupported TIFF integer tag type {field_type} for tag {tag}: {path}")
 
 
-def _tiff_rational(path: str, tags: dict[int, tuple[int, int, int]], tag: int) -> Optional[float]:
+def _tiff_rational(path: str, tags: dict[int, tuple[int, int, int]], tag: int, is_bigtiff: bool = False) -> Optional[float]:
     entry = tags.get(tag)
     if entry is None:
         return None
     field_type, count, value = entry
     if field_type != 5 or count != 1:
         return None
-    with open(path, "rb") as f:
-        f.seek(value)
-        numerator, denominator = struct.unpack("<II", _read_exact(f, 8))
+    if is_bigtiff:
+        numerator, denominator = struct.unpack("<II", struct.pack("<Q", value))
+    else:
+        with open(path, "rb") as f:
+            f.seek(value)
+            numerator, denominator = struct.unpack("<II", _read_exact(f, 8))
     if denominator == 0:
         return None
     return float(numerator) / float(denominator)
@@ -644,7 +649,7 @@ def read_tiff_image_info(path: str) -> TiffImageInfo:
     is_bigtiff, tags, _header = _parse_tiff_ifd(path)
     width = _tiff_single_int(path, tags, 256)
     height = _tiff_single_int(path, tags, 257)
-    bits_per_sample = _tiff_short_values(path, tags, 258)
+    bits_per_sample = _tiff_short_values(path, tags, 258, is_bigtiff)
     compression = _tiff_single_int(path, tags, 259)
     photometric = _tiff_single_int(path, tags, 262)
     strip_offset = _tiff_single_int(path, tags, 273)
@@ -675,8 +680,8 @@ def read_tiff_image_info(path: str) -> TiffImageInfo:
         rows_per_strip=rows_per_strip,
         strip_offset=strip_offset,
         strip_byte_count=strip_byte_count,
-        dpi_x=_tiff_rational(path, tags, 282),
-        dpi_y=_tiff_rational(path, tags, 283),
+        dpi_x=_tiff_rational(path, tags, 282, is_bigtiff),
+        dpi_y=_tiff_rational(path, tags, 283, is_bigtiff),
         is_bigtiff=is_bigtiff,
         image_offset=strip_offset,
         row_bytes=row_bytes,
@@ -839,6 +844,15 @@ def _short_value(value: int) -> int:
     return value & 0xFFFF
 
 
+def _bigtiff_short_values(*values: int) -> int:
+    payload = struct.pack("<" + "H" * len(values), *values)
+    return struct.unpack("<Q", payload.ljust(8, b"\0"))[0]
+
+
+def _bigtiff_rational_value(numerator: int, denominator: int) -> int:
+    return struct.unpack("<Q", struct.pack("<II", numerator, denominator))[0]
+
+
 def numpy_available() -> bool:
     return _np is not None
 
@@ -918,25 +932,22 @@ class RgbTiffWriter:
         entry_count = 13
         ifd_offset = 16
         ifd_size = 8 + entry_count * 20 + 8
-        bits_offset = ifd_offset + ifd_size
-        xres_offset = bits_offset + 6
-        yres_offset = xres_offset + 8
-        software_offset = yres_offset + 8
+        software_offset = ifd_offset + ifd_size
         image_offset = software_offset + len(software)
         image_bytes = self.width * self.height * 3
 
         entries = [
             _bigtiff_ifd_entry(256, 4, 1, self.width),
             _bigtiff_ifd_entry(257, 4, 1, self.height),
-            _bigtiff_ifd_entry(258, 3, 3, bits_offset),
+            _bigtiff_ifd_entry(258, 3, 3, _bigtiff_short_values(8, 8, 8)),
             _bigtiff_ifd_entry(259, 3, 1, _short_value(1)),
             _bigtiff_ifd_entry(262, 3, 1, _short_value(2)),
             _bigtiff_ifd_entry(273, 16, 1, image_offset),
             _bigtiff_ifd_entry(277, 3, 1, _short_value(3)),
             _bigtiff_ifd_entry(278, 4, 1, self.height),
             _bigtiff_ifd_entry(279, 16, 1, image_bytes),
-            _bigtiff_ifd_entry(282, 5, 1, xres_offset),
-            _bigtiff_ifd_entry(283, 5, 1, yres_offset),
+            _bigtiff_ifd_entry(282, 5, 1, _bigtiff_rational_value(self.dpi, 1)),
+            _bigtiff_ifd_entry(283, 5, 1, _bigtiff_rational_value(self.dpi, 1)),
             _bigtiff_ifd_entry(296, 3, 1, _short_value(2)),
             _bigtiff_ifd_entry(305, 2, len(software), software_offset),
         ]
@@ -951,9 +962,6 @@ class RgbTiffWriter:
         for entry in entries:
             f.write(entry)
         f.write(struct.pack("<Q", 0))
-        f.write(struct.pack("<HHH", 8, 8, 8))
-        f.write(struct.pack("<II", self.dpi, 1))
-        f.write(struct.pack("<II", self.dpi, 1))
         f.write(software)
         return self
 
@@ -1050,9 +1058,7 @@ class OneBitTiffWriter:
         entry_count = 13
         ifd_offset = 16
         ifd_size = 8 + entry_count * 20 + 8
-        xres_offset = ifd_offset + ifd_size
-        yres_offset = xres_offset + 8
-        software_offset = yres_offset + 8
+        software_offset = ifd_offset + ifd_size
         image_offset = software_offset + len(software)
         image_bytes = self.row_bytes * self.height
 
@@ -1066,8 +1072,8 @@ class OneBitTiffWriter:
             _bigtiff_ifd_entry(277, 3, 1, _short_value(1)),
             _bigtiff_ifd_entry(278, 4, 1, self.height),
             _bigtiff_ifd_entry(279, 16, 1, image_bytes),
-            _bigtiff_ifd_entry(282, 5, 1, xres_offset),
-            _bigtiff_ifd_entry(283, 5, 1, yres_offset),
+            _bigtiff_ifd_entry(282, 5, 1, _bigtiff_rational_value(self.dpi, 1)),
+            _bigtiff_ifd_entry(283, 5, 1, _bigtiff_rational_value(self.dpi, 1)),
             _bigtiff_ifd_entry(296, 3, 1, _short_value(2)),
             _bigtiff_ifd_entry(305, 2, len(software), software_offset),
         ]
@@ -1082,8 +1088,6 @@ class OneBitTiffWriter:
         for entry in entries:
             f.write(entry)
         f.write(struct.pack("<Q", 0))
-        f.write(struct.pack("<II", self.dpi, 1))
-        f.write(struct.pack("<II", self.dpi, 1))
         f.write(software)
         return self
 
