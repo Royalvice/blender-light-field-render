@@ -300,6 +300,32 @@ def candidate_black(candidate: CandidateSpec, rgb: np.ndarray, *, x0: int, y0: i
             phase = np.floor(np.mod(yy + float(p.get("phase_y", 0.0)), max(1.0, period))).astype(np.int64) % thresholds.size
         return tone >= thresholds[phase]
 
+    if family == "row_transition_dither":
+        period = float(p["period_px"]) * (float(ppi) / float(p.get("reference_ppi", ppi))) if p.get("scale_with_ppi") else float(p["period_px"])
+        thresholds = np.asarray(p["thresholds"], dtype=np.float32)
+        phase_mode = p.get("phase_mode", "modulo")
+        if phase_mode == "normalized":
+            phase = np.floor(np.mod(yy + float(p.get("phase_y", 0.0)), max(1.0, period)) / max(1.0, period) * thresholds.size).astype(np.int64) % thresholds.size
+        else:
+            phase = np.floor(np.mod(yy + float(p.get("phase_y", 0.0)), max(1.0, period))).astype(np.int64) % thresholds.size
+        row_threshold = thresholds[phase]
+        transition_width = max(1.0e-6, float(p.get("transition_width", 0.05)))
+        low = row_threshold - transition_width * 0.5
+        high = row_threshold + transition_width * 0.5
+        fraction = np.clip((tone - low) / transition_width, 0.0, 1.0)
+        dither_kind = p.get("dither", "bayer")
+        if dither_kind == "hash":
+            seed = np.uint32(int(p.get("seed", 0)) & 0xFFFFFFFF)
+            seed_mix = np.uint32((int(seed) * 0x85EBCA6B) & 0xFFFFFFFF)
+            values = xx.astype(np.uint32) ^ (yy.astype(np.uint32) * np.uint32(0x9E3779B1)) ^ seed_mix
+            dither = hash_threshold_u32(values)
+        else:
+            matrix = bayer_matrix(int(p.get("matrix_size", 4)))
+            mx = np.mod(xx.astype(np.int64) + int(p.get("phase_x", 0)), matrix.shape[1])
+            my = np.mod(yy.astype(np.int64) + int(p.get("phase_y_dither", 0)), matrix.shape[0])
+            dither = matrix[my, mx]
+        return np.where(tone >= high, True, np.where(tone <= low, False, fraction >= dither))
+
     if family == "periodic_threshold":
         period_x = float(p["period_x_px"]) * (float(ppi) / float(p.get("reference_ppi", ppi))) if p.get("scale_x_with_ppi") else float(p["period_x_px"])
         period_y = float(p["period_y_px"]) * (float(ppi) / float(p.get("reference_ppi", ppi))) if p.get("scale_y_with_ppi") else float(p["period_y_px"])
@@ -335,7 +361,8 @@ def candidate_black(candidate: CandidateSpec, rgb: np.ndarray, *, x0: int, y0: i
 
     if family in {"hash_fm", "blue_noise_hash", "green_noise_hash"}:
         seed = np.uint32(int(p.get("seed", 0)) & 0xFFFFFFFF)
-        values = xx.astype(np.uint32) ^ (yy.astype(np.uint32) * np.uint32(0x9E3779B1)) ^ (seed * np.uint32(0x85EBCA6B))
+        seed_mix = np.uint32((int(seed) * 0x85EBCA6B) & 0xFFFFFFFF)
+        values = xx.astype(np.uint32) ^ (yy.astype(np.uint32) * np.uint32(0x9E3779B1)) ^ seed_mix
         threshold = hash_threshold_u32(values)
         if family == "green_noise_hash":
             threshold = np.clip(0.75 * threshold + 0.25 * (0.5 + 0.5 * np.sin((xx + yy) / max(2.0, float(p.get("cluster_period", 24.0))))), 0.0, 1.0)
@@ -2922,6 +2949,57 @@ def cmd_fit_probe_tone_block_screen(args: argparse.Namespace) -> None:
                     best = min(results, key=lambda item: item["mismatch_ratio"])
                     print(f"fit-tone-block {searched} best={best['mismatch_ratio']:.8f} {best['candidate']['name']}", file=sys.stderr)
 
+    if "transition" in strategies:
+        periods = parse_float_grid(args.period_grid, name="period")
+        threshold_counts = parse_int_grid(args.threshold_count_grid, name="threshold-count")
+        phase_values = parse_float_grid(args.phase_grid, name="phase-y") if args.phase_grid else None
+        transition_widths = parse_float_grid(args.transition_width_grid, name="transition-width")
+        dither_kinds = parse_text_grid(args.transition_dither_grid, name="transition-dither")
+        matrix_sizes = parse_int_grid(args.transition_matrix_size_grid, name="transition-matrix-size")
+        seeds = parse_int_grid(args.transition_seed_grid, name="transition-seed")
+        for gamma, density, bias, period_px, threshold_count in itertools.product(gammas, densities, biases, periods, threshold_counts):
+            phases = phase_values if phase_values is not None else [float(value) for value in range(threshold_count)]
+            for phase_y in phases:
+                base = fit_thresholds_for_payloads(
+                    payloads,
+                    gamma=gamma,
+                    density=density,
+                    bias=bias,
+                    period_px=period_px,
+                    phase_y=phase_y,
+                    threshold_count=threshold_count,
+                    reference_ppi=args.reference_ppi,
+                    phase_mode=args.phase_mode,
+                    scale_with_ppi=args.scale_with_ppi,
+                )
+                for transition_width in transition_widths:
+                    for dither_kind in dither_kinds:
+                        if dither_kind == "hash":
+                            iterator = (("hash", 0, seed) for seed in seeds)
+                        else:
+                            iterator = ((dither_kind, size, 0) for size in matrix_sizes)
+                        for kind, matrix_size, seed in iterator:
+                            params = dict(base.params)
+                            params.update(
+                                {
+                                    "transition_width": float(transition_width),
+                                    "dither": kind,
+                                    "matrix_size": int(matrix_size),
+                                    "seed": int(seed),
+                                }
+                            )
+                            candidate = CandidateSpec(
+                                "row_transition_dither",
+                                f"transition_{kind}_w{transition_width}_m{matrix_size}_s{seed}_{base.name}",
+                                params,
+                            )
+                            result = score_materialized_candidate(candidate, payloads)
+                            results.append(result)
+                            searched += 1
+                            if args.progress_every > 0 and searched % args.progress_every == 0:
+                                best = min(results, key=lambda item: item["mismatch_ratio"])
+                                print(f"fit-tone-block {searched} best={best['mismatch_ratio']:.8f} {best['candidate']['name']}", file=sys.stderr)
+
     if "periodic" in strategies:
         sizes = parse_size_grid(args.size_grid)
         period_x_values = parse_float_grid(args.period_x_grid, name="period-x") if args.period_x_grid else None
@@ -3343,7 +3421,7 @@ def build_parser() -> argparse.ArgumentParser:
     tone_fit.add_argument("--min-black-ratio", type=float, default=0.02)
     tone_fit.add_argument("--max-black-ratio", type=float, default=0.98)
     tone_fit.add_argument("--max-per-target", type=int, default=240)
-    tone_fit.add_argument("--strategy", default="row,periodic", help="Comma-separated: row,periodic.")
+    tone_fit.add_argument("--strategy", default="row,periodic", help="Comma-separated: row,transition,periodic.")
     tone_fit.add_argument("--gamma-grid", default="0.35,0.5,0.7,1.0,1.3,1.8")
     tone_fit.add_argument("--density-grid", default="1.0")
     tone_fit.add_argument("--bias-grid", default="0.0")
@@ -3353,6 +3431,10 @@ def build_parser() -> argparse.ArgumentParser:
     tone_fit.add_argument("--phase-mode", default="modulo", choices=["modulo", "normalized"])
     tone_fit.add_argument("--reference-ppi", type=int, default=4000)
     tone_fit.add_argument("--scale-with-ppi", action=argparse.BooleanOptionalAction, default=False)
+    tone_fit.add_argument("--transition-width-grid", default="0.02,0.04,0.06,0.08,0.12,0.18")
+    tone_fit.add_argument("--transition-dither-grid", default="bayer,hash")
+    tone_fit.add_argument("--transition-matrix-size-grid", default="2,3,4,8,16")
+    tone_fit.add_argument("--transition-seed-grid", default="0,1,17,149,624,20260624")
     tone_fit.add_argument("--size-grid", default="1x18,2x18,3x18,6x18,9x18,18x18,38x18,76x18")
     tone_fit.add_argument("--period-x-grid", default="76")
     tone_fit.add_argument("--period-y-grid", default="18")
