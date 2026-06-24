@@ -3098,7 +3098,22 @@ def cmd_fit_probe_tone_block_screen(args: argparse.Namespace) -> None:
             max_black_ratio=args.max_black_ratio,
             max_per_target=args.max_per_target,
         )
-    print(f"materializing {len(samples)} flat tone-block windows", file=sys.stderr)
+    holdout_samples: list[SampleSpec] = []
+    if args.holdout_every and args.holdout_every > 1:
+        train_samples = []
+        for index, sample in enumerate(samples):
+            if index % int(args.holdout_every) == int(args.holdout_offset):
+                holdout_samples.append(sample)
+            else:
+                train_samples.append(sample)
+        if not train_samples or not holdout_samples:
+            raise SystemExit("--holdout-every split produced empty train or holdout samples")
+        samples = train_samples
+    print(
+        f"materializing {len(samples)} flat tone-block train windows"
+        + (f" and {len(holdout_samples)} holdout windows" if holdout_samples else ""),
+        file=sys.stderr,
+    )
     payloads = materialize_sample_payloads(
         samples,
         pe=args.pe,
@@ -3110,6 +3125,22 @@ def cmd_fit_probe_tone_block_screen(args: argparse.Namespace) -> None:
         source_y_scale=args.source_y_scale,
         source_x_offset=args.source_x_offset,
         source_y_offset=args.source_y_offset,
+    )
+    holdout_payloads = (
+        materialize_sample_payloads(
+            holdout_samples,
+            pe=args.pe,
+            angle=args.angle,
+            offset=args.offset,
+            reverse_views=args.reverse_views,
+            coordinate_mode=args.coordinate_mode,
+            source_x_scale=args.source_x_scale,
+            source_y_scale=args.source_y_scale,
+            source_x_offset=args.source_x_offset,
+            source_y_offset=args.source_y_offset,
+        )
+        if holdout_samples
+        else []
     )
 
     results = []
@@ -3368,6 +3399,13 @@ def cmd_fit_probe_tone_block_screen(args: argparse.Namespace) -> None:
     if not results:
         raise SystemExit("No fit-probe-tone-block-screen strategies were selected")
     results.sort(key=lambda item: item["mismatch_ratio"])
+    holdout_results = []
+    if holdout_payloads:
+        for result in results[: max(args.top, args.holdout_top)]:
+            holdout_result = score_materialized_candidate(candidate_from_payload(result["candidate"]), holdout_payloads)
+            holdout_result["train_mismatch_ratio"] = result["mismatch_ratio"]
+            holdout_results.append(holdout_result)
+        holdout_results.sort(key=lambda item: item["mismatch_ratio"])
     payload = {
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "command": "fit-probe-tone-block-screen",
@@ -3393,12 +3431,17 @@ def cmd_fit_probe_tone_block_screen(args: argparse.Namespace) -> None:
             "include_ramp_overlap_row": args.include_ramp_overlap_row,
             "raw_sample_count": raw_sample_count,
             "sample_count": len(samples),
+            "holdout_sample_count": len(holdout_samples),
+            "holdout_every": args.holdout_every,
+            "holdout_offset": args.holdout_offset,
             "samples": [sample_to_dict(sample) for sample in samples],
+            "holdout_samples": [sample_to_dict(sample) for sample in holdout_samples],
             "informative_only": args.informative_only,
         },
         "strategy": sorted(strategies),
         "candidate_count": searched,
         "top_results": [compact_result(item, include_thresholds=args.include_thresholds) for item in results[: args.top]],
+        "holdout_top_results": [compact_result(item, include_thresholds=args.include_thresholds) for item in holdout_results[: args.holdout_top]],
         "constraints": {
             "uses_probe_design_tone_blocks": True,
             "stores_target_residual_table": False,
@@ -3747,6 +3790,9 @@ def build_parser() -> argparse.ArgumentParser:
     tone_fit.add_argument("--min-black-ratio", type=float, default=0.02)
     tone_fit.add_argument("--max-black-ratio", type=float, default=0.98)
     tone_fit.add_argument("--max-per-target", type=int, default=240)
+    tone_fit.add_argument("--holdout-every", type=int, default=0, help="If >1, keep every Nth sampled window as holdout instead of fitting on it.")
+    tone_fit.add_argument("--holdout-offset", type=int, default=0)
+    tone_fit.add_argument("--holdout-top", type=int, default=12)
     tone_fit.add_argument("--strategy", default="row,periodic", help="Comma-separated: row,phasetransfer,transition,diffusion,microspot,periodic.")
     tone_fit.add_argument("--gamma-grid", default="0.35,0.5,0.7,1.0,1.3,1.8")
     tone_fit.add_argument("--density-grid", default="1.0")
