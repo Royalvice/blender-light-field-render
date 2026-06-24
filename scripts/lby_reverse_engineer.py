@@ -453,6 +453,26 @@ def candidate_black(candidate: CandidateSpec, rgb: np.ndarray, *, x0: int, y0: i
     raise ValueError(f"Unknown candidate family: {family}")
 
 
+def sample_input_group(sample: SampleSpec) -> str:
+    name = sample.name.lower()
+    if "tone_ramp" in name:
+        return "tone_ramp"
+    if "tone_block" in name:
+        return "flat_tone"
+    return "default"
+
+
+def candidate_black_for_sample(candidate: CandidateSpec, rgb: np.ndarray, sample: SampleSpec) -> np.ndarray:
+    if candidate.family == "sample_grouped":
+        group = sample_input_group(sample)
+        groups = candidate.params.get("groups", {})
+        payload = groups.get(group) or groups.get("default")
+        if not payload:
+            raise ValueError(f"Grouped candidate has no parameters for sample group {group!r}")
+        return candidate_black(candidate_from_payload(payload), rgb, x0=sample.x0, y0=sample.y0, ppi=sample.ppi)
+    return candidate_black(candidate, rgb, x0=sample.x0, y0=sample.y0, ppi=sample.ppi)
+
+
 def screen_diffusion_black(
     tone: np.ndarray,
     threshold: np.ndarray,
@@ -1010,7 +1030,7 @@ def score_materialized_candidate(candidate: CandidateSpec, payloads: Sequence[di
     per_sample = []
     for payload in payloads:
         sample: SampleSpec = payload["sample"]
-        black = candidate_black(candidate, payload["rgb"], x0=sample.x0, y0=sample.y0, ppi=sample.ppi)
+        black = candidate_black_for_sample(candidate, payload["rgb"], sample)
         target = payload["target"]
         local_tp, local_tn, local_fp, local_fn = confusion_tuple(black, target)
         local_pixels = int(target.size)
@@ -3415,6 +3435,72 @@ def cmd_fit_probe_tone_block_screen(args: argparse.Namespace) -> None:
                         best = min(results, key=lambda item: item["mismatch_ratio"])
                         print(f"fit-tone-block {searched} best={best['mismatch_ratio']:.8f} {best['candidate']['name']}", file=sys.stderr)
 
+    if "groupedperiodic" in strategies:
+        grouped_payloads: dict[str, list[dict]] = {}
+        for payload in payloads:
+            grouped_payloads.setdefault(sample_input_group(payload["sample"]), []).append(payload)
+        sizes = parse_size_grid(args.size_grid)
+        period_x_values = parse_float_grid(args.period_x_grid, name="period-x") if args.period_x_grid else None
+        period_y_values = parse_float_grid(args.period_y_grid, name="period-y") if args.period_y_grid else None
+        phase_x_values = parse_float_grid(args.phase_x_grid, name="phase-x")
+        phase_y_values = parse_float_grid(args.phase_y_grid, name="phase-y")
+        for gamma, density, bias, (width_cells, height_cells), phase_x, phase_y in itertools.product(
+            gammas,
+            densities,
+            biases,
+            sizes,
+            phase_x_values,
+            phase_y_values,
+        ):
+            candidate_period_x_values = period_x_values or [float(width_cells)]
+            candidate_period_y_values = period_y_values or [float(height_cells)]
+            for period_x, period_y in itertools.product(candidate_period_x_values, candidate_period_y_values):
+                group_candidates = {}
+                for group, group_payloads in grouped_payloads.items():
+                    group_candidate = fit_periodic_thresholds_for_payloads(
+                        group_payloads,
+                        gamma=gamma,
+                        density=density,
+                        bias=bias,
+                        period_x_px=period_x,
+                        period_y_px=period_y,
+                        phase_x=phase_x,
+                        phase_y=phase_y,
+                        threshold_width=width_cells,
+                        threshold_height=height_cells,
+                        scale_x_with_ppi=args.scale_x_with_ppi,
+                        scale_y_with_ppi=args.scale_y_with_ppi,
+                        reference_ppi=args.reference_ppi,
+                    )
+                    group_candidate = CandidateSpec(
+                        group_candidate.family,
+                        f"{group}_{group_candidate.name}",
+                        group_candidate.params,
+                    )
+                    group_candidates[group] = {
+                        "family": group_candidate.family,
+                        "name": group_candidate.name,
+                        "params": group_candidate.params,
+                    }
+                if "default" not in group_candidates:
+                    group_candidates["default"] = next(iter(group_candidates.values()))
+                candidate = CandidateSpec(
+                    "sample_grouped",
+                    f"grouped_periodic_{width_cells}x{height_cells}_g{gamma}_d{density}_b{bias}_px{phase_x}_py{phase_y}",
+                    {
+                        "selector": "probe_sample_input_type",
+                        "period_x_px": float(period_x),
+                        "period_y_px": float(period_y),
+                        "groups": group_candidates,
+                    },
+                )
+                result = score_materialized_candidate(candidate, payloads)
+                results.append(result)
+                searched += 1
+                if args.progress_every > 0 and searched % args.progress_every == 0:
+                    best = min(results, key=lambda item: item["mismatch_ratio"])
+                    print(f"fit-tone-block {searched} best={best['mismatch_ratio']:.8f} {best['candidate']['name']}", file=sys.stderr)
+
     if "periodic" in strategies:
         sizes = parse_size_grid(args.size_grid)
         period_x_values = parse_float_grid(args.period_x_grid, name="period-x") if args.period_x_grid else None
@@ -3862,7 +3948,7 @@ def build_parser() -> argparse.ArgumentParser:
     tone_fit.add_argument("--holdout-every", type=int, default=0, help="If >1, keep every Nth sampled window as holdout instead of fitting on it.")
     tone_fit.add_argument("--holdout-offset", type=int, default=0)
     tone_fit.add_argument("--holdout-top", type=int, default=12)
-    tone_fit.add_argument("--strategy", default="row,periodic", help="Comma-separated: row,phasetransfer,transition,diffusion,microspot,periodic.")
+    tone_fit.add_argument("--strategy", default="row,periodic", help="Comma-separated: row,phasetransfer,transition,diffusion,microspot,groupedperiodic,periodic.")
     tone_fit.add_argument("--gamma-grid", default="0.35,0.5,0.7,1.0,1.3,1.8")
     tone_fit.add_argument("--density-grid", default="1.0")
     tone_fit.add_argument("--bias-grid", default="0.0")
