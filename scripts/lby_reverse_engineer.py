@@ -326,6 +326,26 @@ def candidate_black(candidate: CandidateSpec, rgb: np.ndarray, *, x0: int, y0: i
             dither = matrix[my, mx]
         return np.where(tone >= high, True, np.where(tone <= low, False, fraction >= dither))
 
+    if family == "row_phase_transfer":
+        period = float(p["period_px"]) * (float(ppi) / float(p.get("reference_ppi", ppi))) if p.get("scale_with_ppi") else float(p["period_px"])
+        phase_count = int(p.get("phase_count", len(p.get("thresholds", [])) or 18))
+        phase_mode = p.get("phase_mode", "modulo")
+        if phase_mode == "normalized":
+            phase = np.floor(np.mod(yy + float(p.get("phase_y", 0.0)), max(1.0, period)) / max(1.0, period) * phase_count).astype(np.int64) % phase_count
+        else:
+            phase = np.floor(np.mod(yy + float(p.get("phase_y", 0.0)), max(1.0, period))).astype(np.int64) % phase_count
+        darkness = 1.0 - np.clip(luma.astype(np.float32) / 255.0, 0.0, 1.0)
+        gammas = np.asarray(p["phase_gamma"], dtype=np.float32)
+        densities = np.asarray(p["phase_density"], dtype=np.float32)
+        biases = np.asarray(p["phase_bias"], dtype=np.float32)
+        thresholds = np.asarray(p["thresholds"], dtype=np.float32)
+        adjusted = np.clip(
+            densities[phase] * np.power(darkness, np.maximum(gammas[phase], 1.0e-6)) + biases[phase],
+            0.0,
+            1.0,
+        )
+        return adjusted >= thresholds[phase]
+
     if family == "row_screen_diffusion":
         period = float(p["period_px"]) * (float(ppi) / float(p.get("reference_ppi", ppi))) if p.get("scale_with_ppi") else float(p["period_px"])
         thresholds = np.asarray(p["thresholds"], dtype=np.float32)
@@ -904,6 +924,85 @@ def fit_periodic_thresholds_for_payloads(
         "bias": float(bias),
         "thresholds": thresholds.tolist(),
     })
+
+
+def fit_phase_transfer_for_payloads(
+    payloads: Sequence[dict],
+    *,
+    gamma_values: Sequence[float],
+    density_values: Sequence[float],
+    bias_values: Sequence[float],
+    period_px: float,
+    phase_y: float,
+    phase_count: int,
+    reference_ppi: int = 4000,
+    phase_mode: str = "modulo",
+    scale_with_ppi: bool = False,
+) -> CandidateSpec:
+    grouped: list[dict[str, list[np.ndarray]]] = [{"darkness": [], "target": []} for _ in range(phase_count)]
+    for payload in payloads:
+        sample: SampleSpec = payload["sample"]
+        rgb = payload["rgb"]
+        target = payload["target"]
+        luma = 0.299 * rgb[..., 0].astype(np.float32) + 0.587 * rgb[..., 1].astype(np.float32) + 0.114 * rgb[..., 2].astype(np.float32)
+        darkness = 1.0 - np.clip(luma / 255.0, 0.0, 1.0)
+        effective_period = float(period_px) * (float(sample.ppi) / float(reference_ppi)) if scale_with_ppi else float(period_px)
+        rows = np.arange(sample.y0, sample.y0 + sample.rows, dtype=np.float32)
+        if phase_mode == "normalized":
+            row_phase = np.floor(np.mod(rows + phase_y, max(1.0, effective_period)) / max(1.0, effective_period) * phase_count).astype(np.int64) % phase_count
+        else:
+            row_phase = np.floor(np.mod(rows + phase_y, max(1.0, effective_period))).astype(np.int64) % phase_count
+        for phase in range(phase_count):
+            mask = row_phase == phase
+            if not np.any(mask):
+                continue
+            grouped[phase]["darkness"].append(darkness[mask].reshape(-1))
+            grouped[phase]["target"].append(target[mask].reshape(-1))
+
+    phase_gamma = []
+    phase_density = []
+    phase_bias = []
+    thresholds = []
+    for phase, values in enumerate(grouped):
+        if not values["darkness"]:
+            phase_gamma.append(1.0)
+            phase_density.append(1.0)
+            phase_bias.append(0.0)
+            thresholds.append(1.1)
+            continue
+        d = np.concatenate(values["darkness"])
+        y = np.concatenate(values["target"])
+        best = None
+        for gamma, density, bias in itertools.product(gamma_values, density_values, bias_values):
+            adjusted = np.clip(float(density) * np.power(d, max(1.0e-6, float(gamma))) + float(bias), 0.0, 1.0)
+            quantiles = np.quantile(adjusted, np.linspace(0.0, 1.0, 129))
+            candidates = np.unique(np.clip(np.concatenate(([0.0, 0.01, 0.02], quantiles, [0.98, 1.0, 1.1])), 0.0, 1.1))
+            for threshold in candidates:
+                pred = adjusted >= threshold
+                error = int(np.count_nonzero(np.logical_xor(pred, y)))
+                if best is None or error < best[0]:
+                    best = (error, float(gamma), float(density), float(bias), float(threshold))
+        assert best is not None
+        phase_gamma.append(best[1])
+        phase_density.append(best[2])
+        phase_bias.append(best[3])
+        thresholds.append(best[4])
+    return CandidateSpec(
+        "row_phase_transfer",
+        f"fit_phase_transfer_period{period_px}_n{phase_count}_p{phase_y}",
+        {
+            "period_px": float(period_px),
+            "reference_ppi": int(reference_ppi),
+            "scale_with_ppi": bool(scale_with_ppi),
+            "phase_y": float(phase_y),
+            "phase_count": int(phase_count),
+            "phase_mode": phase_mode,
+            "phase_gamma": phase_gamma,
+            "phase_density": phase_density,
+            "phase_bias": phase_bias,
+            "thresholds": thresholds,
+        },
+    )
 
 
 def score_materialized_candidate(candidate: CandidateSpec, payloads: Sequence[dict]) -> dict:
@@ -3097,6 +3196,35 @@ def cmd_fit_probe_tone_block_screen(args: argparse.Namespace) -> None:
                                 best = min(results, key=lambda item: item["mismatch_ratio"])
                                 print(f"fit-tone-block {searched} best={best['mismatch_ratio']:.8f} {best['candidate']['name']}", file=sys.stderr)
 
+    if "phasetransfer" in strategies:
+        gamma_values = parse_float_grid(args.phase_transfer_gamma_grid, name="phase-transfer-gamma")
+        density_values = parse_float_grid(args.phase_transfer_density_grid, name="phase-transfer-density")
+        bias_values = parse_float_grid(args.phase_transfer_bias_grid, name="phase-transfer-bias")
+        periods = parse_float_grid(args.period_grid, name="period")
+        phase_counts = parse_int_grid(args.threshold_count_grid, name="threshold-count")
+        phase_values = parse_float_grid(args.phase_grid, name="phase-y") if args.phase_grid else None
+        for period_px, phase_count in itertools.product(periods, phase_counts):
+            phases = phase_values if phase_values is not None else [float(value) for value in range(phase_count)]
+            for phase_y in phases:
+                candidate = fit_phase_transfer_for_payloads(
+                    payloads,
+                    gamma_values=gamma_values,
+                    density_values=density_values,
+                    bias_values=bias_values,
+                    period_px=period_px,
+                    phase_y=phase_y,
+                    phase_count=phase_count,
+                    reference_ppi=args.reference_ppi,
+                    phase_mode=args.phase_mode,
+                    scale_with_ppi=args.scale_with_ppi,
+                )
+                result = score_materialized_candidate(candidate, payloads)
+                results.append(result)
+                searched += 1
+                if args.progress_every > 0 and searched % args.progress_every == 0:
+                    best = min(results, key=lambda item: item["mismatch_ratio"])
+                    print(f"fit-tone-block {searched} best={best['mismatch_ratio']:.8f} {best['candidate']['name']}", file=sys.stderr)
+
     if "diffusion" in strategies:
         periods = parse_float_grid(args.period_grid, name="period")
         threshold_counts = parse_int_grid(args.threshold_count_grid, name="threshold-count")
@@ -3619,7 +3747,7 @@ def build_parser() -> argparse.ArgumentParser:
     tone_fit.add_argument("--min-black-ratio", type=float, default=0.02)
     tone_fit.add_argument("--max-black-ratio", type=float, default=0.98)
     tone_fit.add_argument("--max-per-target", type=int, default=240)
-    tone_fit.add_argument("--strategy", default="row,periodic", help="Comma-separated: row,transition,diffusion,microspot,periodic.")
+    tone_fit.add_argument("--strategy", default="row,periodic", help="Comma-separated: row,phasetransfer,transition,diffusion,microspot,periodic.")
     tone_fit.add_argument("--gamma-grid", default="0.35,0.5,0.7,1.0,1.3,1.8")
     tone_fit.add_argument("--density-grid", default="1.0")
     tone_fit.add_argument("--bias-grid", default="0.0")
@@ -3633,6 +3761,9 @@ def build_parser() -> argparse.ArgumentParser:
     tone_fit.add_argument("--transition-dither-grid", default="bayer,hash")
     tone_fit.add_argument("--transition-matrix-size-grid", default="2,3,4,8,16")
     tone_fit.add_argument("--transition-seed-grid", default="0,1,17,149,624,20260624")
+    tone_fit.add_argument("--phase-transfer-gamma-grid", default="0.16,0.22,0.25,0.35,0.5,0.7,1.0")
+    tone_fit.add_argument("--phase-transfer-density-grid", default="0.6,0.8,1.0,1.2")
+    tone_fit.add_argument("--phase-transfer-bias-grid", default="-0.16,-0.10,-0.05,0.0,0.05")
     tone_fit.add_argument("--diffusion-kernel-grid", default="fs,jjn,stucki")
     tone_fit.add_argument("--diffusion-strength-grid", default="0.35,0.5,0.75,1.0,1.25")
     tone_fit.add_argument("--diffusion-threshold-bias-grid", default="-0.06,-0.03,0.0,0.03,0.06")
