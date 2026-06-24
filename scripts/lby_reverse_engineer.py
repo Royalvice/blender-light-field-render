@@ -1324,6 +1324,52 @@ def probe_tone_block_sample_specs(
     return specs
 
 
+def probe_tone_ramp_sample_specs(
+    root: Path,
+    *,
+    rows: int,
+    width: int,
+    coordinate_mode: str,
+    x_points: int,
+    y_points: int,
+) -> list[SampleSpec]:
+    """Return target-space windows from the probe's continuous tone ramp strip."""
+    source_dir, target_tiff = probe_paths(root)
+    info = delivery.read_uncompressed_one_bit_tiff_info(str(target_tiff))
+    source_width, source_height = source_dimensions(source_dir)
+    ppi = int(info.dpi_x or 4000)
+    sample_width = max(1, min(int(width), info.width))
+    sample_rows = max(1, min(int(rows), info.height))
+    source_y0, source_y1 = 2940, 3050
+    x_fractions = np.linspace(0.06, 0.94, max(1, int(x_points)))
+    y_fractions = np.linspace(0.20, 0.80, max(1, int(y_points)))
+    specs: list[SampleSpec] = []
+    for xf in x_fractions:
+        source_x = xf * (2160 - 1)
+        final_x = int(round(source_to_output_coordinate(source_x, source_size=source_width, output_size=info.width, coordinate_mode=coordinate_mode)))
+        x0 = max(0, min(info.width - sample_width, final_x - sample_width // 2))
+        tone = round(float(xf) * 255.0)
+        for yf in y_fractions:
+            source_y = source_y0 + (source_y1 - source_y0 - 1) * float(yf)
+            final_y = int(round(source_to_output_coordinate(source_y, source_size=source_height, output_size=info.height, coordinate_mode=coordinate_mode)))
+            y0 = max(0, min(info.height - sample_rows, final_y - sample_rows // 2))
+            specs.append(
+                SampleSpec(
+                    f"624_probe_tone_ramp_t{tone:03d}_x{float(xf):.3f}_y{float(yf):.2f}",
+                    source_dir,
+                    target_tiff,
+                    x0,
+                    y0,
+                    sample_width,
+                    sample_rows,
+                    ppi,
+                )
+            )
+    if not specs:
+        raise SystemExit("No probe tone-ramp sample specs were selected")
+    return specs
+
+
 def sample_paths_for_dataset(root: Path, name: str) -> tuple[Path, Path]:
     key = name.lower().replace("-", "_")
     if key in {"624", "624_probe", "probe"}:
@@ -3090,6 +3136,18 @@ def cmd_fit_probe_tone_block_screen(args: argparse.Namespace) -> None:
         y_points_per_block=args.y_points_per_block,
         include_ramp_overlap_row=args.include_ramp_overlap_row,
     )
+    ramp_raw_sample_count = 0
+    if args.include_ramp_samples:
+        ramp_samples = probe_tone_ramp_sample_specs(
+            args.dataset_root,
+            rows=args.ramp_rows or args.rows,
+            width=args.ramp_width or args.width,
+            coordinate_mode=args.coordinate_mode,
+            x_points=args.ramp_x_points,
+            y_points=args.ramp_y_points,
+        )
+        ramp_raw_sample_count = len(ramp_samples)
+        samples.extend(ramp_samples)
     raw_sample_count = len(samples)
     if args.informative_only:
         samples = filter_informative_samples(
@@ -3429,6 +3487,12 @@ def cmd_fit_probe_tone_block_screen(args: argparse.Namespace) -> None:
             "x_points_per_block": args.x_points_per_block,
             "y_points_per_block": args.y_points_per_block,
             "include_ramp_overlap_row": args.include_ramp_overlap_row,
+            "include_ramp_samples": args.include_ramp_samples,
+            "ramp_raw_sample_count": ramp_raw_sample_count,
+            "ramp_rows": args.ramp_rows or args.rows,
+            "ramp_width": args.ramp_width or args.width,
+            "ramp_x_points": args.ramp_x_points,
+            "ramp_y_points": args.ramp_y_points,
             "raw_sample_count": raw_sample_count,
             "sample_count": len(samples),
             "holdout_sample_count": len(holdout_samples),
@@ -3786,6 +3850,11 @@ def build_parser() -> argparse.ArgumentParser:
     tone_fit.add_argument("--x-points-per-block", type=int, default=1)
     tone_fit.add_argument("--y-points-per-block", type=int, default=1)
     tone_fit.add_argument("--include-ramp-overlap-row", action=argparse.BooleanOptionalAction, default=True)
+    tone_fit.add_argument("--include-ramp-samples", action=argparse.BooleanOptionalAction, default=False)
+    tone_fit.add_argument("--ramp-rows", type=int)
+    tone_fit.add_argument("--ramp-width", type=int)
+    tone_fit.add_argument("--ramp-x-points", type=int, default=12)
+    tone_fit.add_argument("--ramp-y-points", type=int, default=2)
     tone_fit.add_argument("--informative-only", action=argparse.BooleanOptionalAction, default=True)
     tone_fit.add_argument("--min-black-ratio", type=float, default=0.02)
     tone_fit.add_argument("--max-black-ratio", type=float, default=0.98)
