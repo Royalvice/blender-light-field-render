@@ -284,6 +284,41 @@ def read_target_window(info, *, x0: int, y0: int, width: int, rows: int) -> np.n
 
 
 def candidate_black(candidate: CandidateSpec, rgb: np.ndarray, *, x0: int, y0: int, ppi: int) -> np.ndarray:
+    if candidate.family == "sample_grouped":
+        selector = str(candidate.params.get("selector", "probe_sample_input_type"))
+        groups = candidate.params.get("groups", {})
+        default_payload = groups.get("default") or groups.get("flat_tone") or next(iter(groups.values()))
+        default_black = candidate_black(candidate_from_payload(default_payload), rgb, x0=x0, y0=y0, ppi=ppi)
+        if selector == "luma_x_gradient":
+            ramp_payload = groups.get("tone_ramp")
+            if not ramp_payload:
+                return default_black
+            ramp_black = candidate_black(candidate_from_payload(ramp_payload), rgb, x0=x0, y0=y0, ppi=ppi)
+            luma_for_selector = (
+                0.299 * rgb[..., 0].astype(np.float32)
+                + 0.587 * rgb[..., 1].astype(np.float32)
+                + 0.114 * rgb[..., 2].astype(np.float32)
+            )
+            left = np.empty_like(luma_for_selector)
+            right = np.empty_like(luma_for_selector)
+            left[:, 1:] = luma_for_selector[:, :-1]
+            left[:, 0] = luma_for_selector[:, 0]
+            right[:, :-1] = luma_for_selector[:, 1:]
+            right[:, -1] = luma_for_selector[:, -1]
+            gradient = np.abs(right - left) * 0.5
+            window = max(1, int(candidate.params.get("gradient_window", 1)))
+            if window > 1:
+                padded = np.pad(gradient, ((0, 0), (window, window)), mode="edge")
+                smoothed = np.zeros_like(gradient)
+                for offset in range(2 * window + 1):
+                    smoothed += padded[:, offset:offset + gradient.shape[1]]
+                gradient = smoothed / float(2 * window + 1)
+            threshold = float(candidate.params.get("gradient_threshold", 0.015)) * 255.0
+            ramp_mask = gradient >= threshold
+            return np.where(ramp_mask, ramp_black, default_black)
+        if selector != "probe_sample_input_type":
+            return default_black
+
     yy = np.arange(y0, y0 + rgb.shape[0], dtype=np.float32)[:, None]
     xx = np.arange(x0, x0 + rgb.shape[1], dtype=np.float32)[None, :]
     luma = 0.299 * rgb[..., 0].astype(np.float32) + 0.587 * rgb[..., 1].astype(np.float32) + 0.114 * rgb[..., 2].astype(np.float32)
@@ -464,6 +499,8 @@ def sample_input_group(sample: SampleSpec) -> str:
 
 def candidate_black_for_sample(candidate: CandidateSpec, rgb: np.ndarray, sample: SampleSpec) -> np.ndarray:
     if candidate.family == "sample_grouped":
+        if candidate.params.get("selector") != "probe_sample_input_type":
+            return candidate_black(candidate, rgb, x0=sample.x0, y0=sample.y0, ppi=sample.ppi)
         group = sample_input_group(sample)
         groups = candidate.params.get("groups", {})
         payload = groups.get(group) or groups.get("default")
@@ -3488,7 +3525,9 @@ def cmd_fit_probe_tone_block_screen(args: argparse.Namespace) -> None:
                     "sample_grouped",
                     f"grouped_periodic_{width_cells}x{height_cells}_g{gamma}_d{density}_b{bias}_px{phase_x}_py{phase_y}",
                     {
-                        "selector": "probe_sample_input_type",
+                        "selector": args.group_selector,
+                        "gradient_threshold": float(args.group_gradient_threshold),
+                        "gradient_window": int(args.group_gradient_window),
                         "period_x_px": float(period_x),
                         "period_y_px": float(period_y),
                         "groups": group_candidates,
@@ -3948,6 +3987,9 @@ def build_parser() -> argparse.ArgumentParser:
     tone_fit.add_argument("--holdout-every", type=int, default=0, help="If >1, keep every Nth sampled window as holdout instead of fitting on it.")
     tone_fit.add_argument("--holdout-offset", type=int, default=0)
     tone_fit.add_argument("--holdout-top", type=int, default=12)
+    tone_fit.add_argument("--group-selector", default="probe_sample_input_type", choices=["probe_sample_input_type", "luma_x_gradient"])
+    tone_fit.add_argument("--group-gradient-threshold", type=float, default=0.015, help="Normalized luma x-gradient threshold for luma_x_gradient grouped selector.")
+    tone_fit.add_argument("--group-gradient-window", type=int, default=1)
     tone_fit.add_argument("--strategy", default="row,periodic", help="Comma-separated: row,phasetransfer,transition,diffusion,microspot,groupedperiodic,periodic.")
     tone_fit.add_argument("--gamma-grid", default="0.35,0.5,0.7,1.0,1.3,1.8")
     tone_fit.add_argument("--density-grid", default="1.0")
