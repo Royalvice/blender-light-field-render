@@ -326,6 +326,58 @@ def candidate_black(candidate: CandidateSpec, rgb: np.ndarray, *, x0: int, y0: i
             dither = matrix[my, mx]
         return np.where(tone >= high, True, np.where(tone <= low, False, fraction >= dither))
 
+    if family == "row_screen_diffusion":
+        period = float(p["period_px"]) * (float(ppi) / float(p.get("reference_ppi", ppi))) if p.get("scale_with_ppi") else float(p["period_px"])
+        thresholds = np.asarray(p["thresholds"], dtype=np.float32)
+        phase_mode = p.get("phase_mode", "modulo")
+        rows_abs = np.arange(y0, y0 + rgb.shape[0], dtype=np.float32)
+        if phase_mode == "normalized":
+            row_phase = np.floor(np.mod(rows_abs + float(p.get("phase_y", 0.0)), max(1.0, period)) / max(1.0, period) * thresholds.size).astype(np.int64) % thresholds.size
+        else:
+            row_phase = np.floor(np.mod(rows_abs + float(p.get("phase_y", 0.0)), max(1.0, period))).astype(np.int64) % thresholds.size
+        row_thresholds = thresholds[row_phase][:, None]
+        return screen_diffusion_black(
+            tone,
+            row_thresholds,
+            family=str(p.get("kernel", "fs")),
+            strength=float(p.get("strength", 1.0)),
+            serpentine=bool(p.get("serpentine", False)),
+            threshold_bias=float(p.get("threshold_bias", 0.0)),
+        )
+
+    if family == "row_micro_spot":
+        period = float(p["period_px"]) * (float(ppi) / float(p.get("reference_ppi", ppi))) if p.get("scale_with_ppi") else float(p["period_px"])
+        thresholds = np.asarray(p["thresholds"], dtype=np.float32)
+        phase_mode = p.get("phase_mode", "modulo")
+        if phase_mode == "normalized":
+            phase = np.floor(np.mod(yy + float(p.get("phase_y", 0.0)), max(1.0, period)) / max(1.0, period) * thresholds.size).astype(np.int64) % thresholds.size
+        else:
+            phase = np.floor(np.mod(yy + float(p.get("phase_y", 0.0)), max(1.0, period))).astype(np.int64) % thresholds.size
+        row_threshold = thresholds[phase]
+        transition_width = max(1.0e-6, float(p.get("transition_width", 0.05)))
+        low = row_threshold - transition_width * 0.5
+        high = row_threshold + transition_width * 0.5
+        coverage = np.clip((tone - low) / transition_width, 0.0, 1.0)
+        cell_x = max(1.0, float(p.get("cell_x", 2.5)))
+        cell_y = max(1.0, float(p.get("cell_y", cell_x)))
+        angle = math.radians(float(p.get("angle", 0.0)))
+        xr = xx * math.cos(angle) + yy * math.sin(angle) + float(p.get("phase_x", 0.0))
+        yr = -xx * math.sin(angle) + yy * math.cos(angle) + float(p.get("phase_y_spot", 0.0))
+        u = ((xr / cell_x) - np.floor(xr / cell_x)) * 2.0 - 1.0
+        v = ((yr / cell_y) - np.floor(yr / cell_y)) * 2.0 - 1.0
+        shape = str(p.get("shape", "line")).lower()
+        if shape == "diamond":
+            metric = (np.abs(u) + np.abs(v)) * 0.5
+            cutoff = coverage
+        elif shape == "round":
+            metric = np.sqrt(u * u + v * v)
+            cutoff = np.sqrt(coverage)
+        else:
+            metric = np.abs(u)
+            cutoff = coverage
+        spot = metric <= cutoff
+        return np.where(tone >= high, True, np.where(tone <= low, False, spot))
+
     if family == "periodic_threshold":
         period_x = float(p["period_x_px"]) * (float(ppi) / float(p.get("reference_ppi", ppi))) if p.get("scale_x_with_ppi") else float(p["period_x_px"])
         period_y = float(p["period_y_px"]) * (float(ppi) / float(p.get("reference_ppi", ppi))) if p.get("scale_y_with_ppi") else float(p["period_y_px"])
@@ -379,6 +431,51 @@ def candidate_black(candidate: CandidateSpec, rgb: np.ndarray, *, x0: int, y0: i
         return diffusion_black(tone, family=family, serpentine=bool(p.get("serpentine", False)))
 
     raise ValueError(f"Unknown candidate family: {family}")
+
+
+def screen_diffusion_black(
+    tone: np.ndarray,
+    threshold: np.ndarray,
+    *,
+    family: str,
+    strength: float,
+    serpentine: bool,
+    threshold_bias: float,
+) -> np.ndarray:
+    rows, width = tone.shape
+    work = tone.astype(np.float32, copy=True)
+    out = np.zeros((rows, width), dtype=bool)
+    family = family.lower()
+    if family == "stucki":
+        kernel = [
+            (1, 0, 8 / 42), (2, 0, 4 / 42),
+            (-2, 1, 2 / 42), (-1, 1, 4 / 42), (0, 1, 8 / 42), (1, 1, 4 / 42), (2, 1, 2 / 42),
+            (-2, 2, 1 / 42), (-1, 2, 2 / 42), (0, 2, 4 / 42), (1, 2, 2 / 42), (2, 2, 1 / 42),
+        ]
+    elif family == "jjn":
+        kernel = [
+            (1, 0, 7 / 48), (2, 0, 5 / 48),
+            (-2, 1, 3 / 48), (-1, 1, 5 / 48), (0, 1, 7 / 48), (1, 1, 5 / 48), (2, 1, 3 / 48),
+            (-2, 2, 1 / 48), (-1, 2, 3 / 48), (0, 2, 5 / 48), (1, 2, 3 / 48), (2, 2, 1 / 48),
+        ]
+    else:
+        kernel = [(1, 0, 7 / 16), (-1, 1, 3 / 16), (0, 1, 5 / 16), (1, 1, 1 / 16)]
+    strength = max(0.0, float(strength))
+    for y in range(rows):
+        xs = range(width - 1, -1, -1) if serpentine and y % 2 else range(width)
+        direction = -1 if serpentine and y % 2 else 1
+        for x in xs:
+            old = max(0.0, min(1.0, float(work[y, x])))
+            t = max(0.0, min(1.0, float(threshold[y, 0]) + threshold_bias))
+            new = 1.0 if old >= t else 0.0
+            out[y, x] = new >= 0.5
+            err = old - new
+            for dx, dy, weight in kernel:
+                tx = x + dx * direction
+                ty = y + dy
+                if 0 <= tx < width and 0 <= ty < rows:
+                    work[ty, tx] += err * weight * strength
+    return out
 
 
 def diffusion_black(tone: np.ndarray, *, family: str, serpentine: bool) -> np.ndarray:
@@ -3000,6 +3097,107 @@ def cmd_fit_probe_tone_block_screen(args: argparse.Namespace) -> None:
                                 best = min(results, key=lambda item: item["mismatch_ratio"])
                                 print(f"fit-tone-block {searched} best={best['mismatch_ratio']:.8f} {best['candidate']['name']}", file=sys.stderr)
 
+    if "diffusion" in strategies:
+        periods = parse_float_grid(args.period_grid, name="period")
+        threshold_counts = parse_int_grid(args.threshold_count_grid, name="threshold-count")
+        phase_values = parse_float_grid(args.phase_grid, name="phase-y") if args.phase_grid else None
+        kernels = parse_text_grid(args.diffusion_kernel_grid, name="diffusion-kernel")
+        strengths = parse_float_grid(args.diffusion_strength_grid, name="diffusion-strength")
+        threshold_biases = parse_float_grid(args.diffusion_threshold_bias_grid, name="diffusion-threshold-bias")
+        serpentines = [value.lower() in {"1", "true", "yes", "serpentine"} for value in parse_text_grid(args.diffusion_serpentine_grid, name="diffusion-serpentine")]
+        for gamma, density, bias, period_px, threshold_count in itertools.product(gammas, densities, biases, periods, threshold_counts):
+            phases = phase_values if phase_values is not None else [float(value) for value in range(threshold_count)]
+            for phase_y in phases:
+                base = fit_thresholds_for_payloads(
+                    payloads,
+                    gamma=gamma,
+                    density=density,
+                    bias=bias,
+                    period_px=period_px,
+                    phase_y=phase_y,
+                    threshold_count=threshold_count,
+                    reference_ppi=args.reference_ppi,
+                    phase_mode=args.phase_mode,
+                    scale_with_ppi=args.scale_with_ppi,
+                )
+                for kernel, strength, threshold_bias, serpentine in itertools.product(kernels, strengths, threshold_biases, serpentines):
+                    params = dict(base.params)
+                    params.update(
+                        {
+                            "kernel": kernel,
+                            "strength": float(strength),
+                            "threshold_bias": float(threshold_bias),
+                            "serpentine": bool(serpentine),
+                        }
+                    )
+                    candidate = CandidateSpec(
+                        "row_screen_diffusion",
+                        f"diffusion_{kernel}_s{strength}_tb{threshold_bias}_{'serp' if serpentine else 'scan'}_{base.name}",
+                        params,
+                    )
+                    result = score_materialized_candidate(candidate, payloads)
+                    results.append(result)
+                    searched += 1
+                    if args.progress_every > 0 and searched % args.progress_every == 0:
+                        best = min(results, key=lambda item: item["mismatch_ratio"])
+                        print(f"fit-tone-block {searched} best={best['mismatch_ratio']:.8f} {best['candidate']['name']}", file=sys.stderr)
+
+    if "microspot" in strategies:
+        periods = parse_float_grid(args.period_grid, name="period")
+        threshold_counts = parse_int_grid(args.threshold_count_grid, name="threshold-count")
+        phase_values = parse_float_grid(args.phase_grid, name="phase-y") if args.phase_grid else None
+        transition_widths = parse_float_grid(args.microspot_transition_width_grid, name="microspot-transition-width")
+        cell_x_values = parse_float_grid(args.microspot_cell_x_grid, name="microspot-cell-x")
+        cell_y_values = parse_float_grid(args.microspot_cell_y_grid, name="microspot-cell-y")
+        shapes = parse_text_grid(args.microspot_shape_grid, name="microspot-shape")
+        phase_x_values = parse_float_grid(args.microspot_phase_x_grid, name="microspot-phase-x")
+        phase_y_values = parse_float_grid(args.microspot_phase_y_grid, name="microspot-phase-y")
+        for gamma, density, bias, period_px, threshold_count in itertools.product(gammas, densities, biases, periods, threshold_counts):
+            phases = phase_values if phase_values is not None else [float(value) for value in range(threshold_count)]
+            for phase_y in phases:
+                base = fit_thresholds_for_payloads(
+                    payloads,
+                    gamma=gamma,
+                    density=density,
+                    bias=bias,
+                    period_px=period_px,
+                    phase_y=phase_y,
+                    threshold_count=threshold_count,
+                    reference_ppi=args.reference_ppi,
+                    phase_mode=args.phase_mode,
+                    scale_with_ppi=args.scale_with_ppi,
+                )
+                for transition_width, cell_x, cell_y, shape, phase_x, phase_y_spot in itertools.product(
+                    transition_widths,
+                    cell_x_values,
+                    cell_y_values,
+                    shapes,
+                    phase_x_values,
+                    phase_y_values,
+                ):
+                    params = dict(base.params)
+                    params.update(
+                        {
+                            "transition_width": float(transition_width),
+                            "cell_x": float(cell_x),
+                            "cell_y": float(cell_y),
+                            "shape": shape,
+                            "phase_x": float(phase_x),
+                            "phase_y_spot": float(phase_y_spot),
+                        }
+                    )
+                    candidate = CandidateSpec(
+                        "row_micro_spot",
+                        f"microspot_{shape}_w{transition_width}_cx{cell_x}_cy{cell_y}_px{phase_x}_py{phase_y_spot}_{base.name}",
+                        params,
+                    )
+                    result = score_materialized_candidate(candidate, payloads)
+                    results.append(result)
+                    searched += 1
+                    if args.progress_every > 0 and searched % args.progress_every == 0:
+                        best = min(results, key=lambda item: item["mismatch_ratio"])
+                        print(f"fit-tone-block {searched} best={best['mismatch_ratio']:.8f} {best['candidate']['name']}", file=sys.stderr)
+
     if "periodic" in strategies:
         sizes = parse_size_grid(args.size_grid)
         period_x_values = parse_float_grid(args.period_x_grid, name="period-x") if args.period_x_grid else None
@@ -3421,7 +3619,7 @@ def build_parser() -> argparse.ArgumentParser:
     tone_fit.add_argument("--min-black-ratio", type=float, default=0.02)
     tone_fit.add_argument("--max-black-ratio", type=float, default=0.98)
     tone_fit.add_argument("--max-per-target", type=int, default=240)
-    tone_fit.add_argument("--strategy", default="row,periodic", help="Comma-separated: row,transition,periodic.")
+    tone_fit.add_argument("--strategy", default="row,periodic", help="Comma-separated: row,transition,diffusion,microspot,periodic.")
     tone_fit.add_argument("--gamma-grid", default="0.35,0.5,0.7,1.0,1.3,1.8")
     tone_fit.add_argument("--density-grid", default="1.0")
     tone_fit.add_argument("--bias-grid", default="0.0")
@@ -3435,6 +3633,16 @@ def build_parser() -> argparse.ArgumentParser:
     tone_fit.add_argument("--transition-dither-grid", default="bayer,hash")
     tone_fit.add_argument("--transition-matrix-size-grid", default="2,3,4,8,16")
     tone_fit.add_argument("--transition-seed-grid", default="0,1,17,149,624,20260624")
+    tone_fit.add_argument("--diffusion-kernel-grid", default="fs,jjn,stucki")
+    tone_fit.add_argument("--diffusion-strength-grid", default="0.35,0.5,0.75,1.0,1.25")
+    tone_fit.add_argument("--diffusion-threshold-bias-grid", default="-0.06,-0.03,0.0,0.03,0.06")
+    tone_fit.add_argument("--diffusion-serpentine-grid", default="false,true")
+    tone_fit.add_argument("--microspot-transition-width-grid", default="0.02,0.04,0.06,0.08,0.12")
+    tone_fit.add_argument("--microspot-cell-x-grid", default="2.5,2.65,2.6666667,3,4.05")
+    tone_fit.add_argument("--microspot-cell-y-grid", default="1,2,3")
+    tone_fit.add_argument("--microspot-shape-grid", default="line,round,diamond")
+    tone_fit.add_argument("--microspot-phase-x-grid", default="0")
+    tone_fit.add_argument("--microspot-phase-y-grid", default="0")
     tone_fit.add_argument("--size-grid", default="1x18,2x18,3x18,6x18,9x18,18x18,38x18,76x18")
     tone_fit.add_argument("--period-x-grid", default="76")
     tone_fit.add_argument("--period-y-grid", default="18")
