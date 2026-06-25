@@ -41,46 +41,52 @@ Use this checklist when publishing a GitHub Release.
 7. Confirm the add-on enables successfully.
 8. Create a small camera array and render JPG source views, continuous interlaced TIFF, and 1-bit Film TIFF outputs.
 9. Generate current-frame final delivery output and verify `interlaced_preview.png`, `film_1bit.tif`, and `delivery_manifest.json`. If continuous interlaced TIFF output is enabled, also verify `interlaced.tif`.
-10. For LBY validation releases, compare the generated 1-bit TIFF against the vendor target with the target-active mask metric before publishing.
+10. For standard AM releases, generate the QA sample and inspect the PNG/TIFF for smooth grayscale ramps:
+
+   ```powershell
+   python scripts\generate_standard_am_sample.py --output-dir standard_am_sample
+   ```
+
+11. For LBY validation releases, compare the generated 1-bit TIFF against the vendor target with the target-active mask metric before publishing.
 
 ## GitHub Release
 
 Recommended tag format:
 
 ```text
-v0.1.19
+v0.1.24
 ```
 
 Recommended title:
 
 ```text
-Light Field Render v0.1.19
+Light Field Render v0.1.24
 ```
 
 Release asset:
 
 ```text
-dist/light_field_render-v0.1.19.zip
+dist/light_field_render-v0.1.24.zip
 ```
 
 Suggested release notes:
 
 ```markdown
-## Light Field Render v0.1.19
+## Light Field Render v0.1.24
 
-Replaces the previous AM diamond LBY approximation with `LBY_row_threshold_v1`, a deterministic 18 px horizontal row-threshold screen fitted against the available factory TIFF target.
+Switches the default 1-bit film output to a standard clustered-dot AM screen for smoother grayscale ramps, while keeping LBY profiles available for comparison and reverse-engineering work.
 
 ### Features
 
-- Final delivery exposes only the `LBY 行阈值屏` print algorithm in the UI.
-- The fixed profile is `LBY_row_threshold_v1`: period `18 px`, Y phase `0`, gamma `0.25`, density `0.25`, bias `-0.05`, and a fixed 18-entry row threshold table.
-- Keeps whole-pixel PE interlacing, JPG source loading through the native Windows decoder, and uncompressed 1-bit TIFF output with `PhotometricInterpretation=1`.
-- Keeps separated delivery operations: generate final delivery in one command, generate only the continuous interlaced TIFF, or halftone an existing `interlaced.tif`.
-- Full-size direct native generation from 150 JPG views at `2160 x 3651`, final `30551 x 54342`, `4000 PPI`, `PE=52.64`, reversed views: `18.55s` generation time on the validation workstation.
-- Full-size comparison against `618空间_dats_dats.tif`: global mismatch `1.6745%`; target-active mismatch `3.7562%` using a 32 px dilated target-black mask.
-- Generated black ratio is about `15.55%`; target black ratio is about `15.31%`.
+- Adds `标准AM菲林` as the default print TIFF algorithm: `4000 PPI`, `200 LPI`, `45°`, round clustered dots, Rec.709 luma, and linear `Gamma=1.0`.
+- Keeps `LBY v1 行阈值屏` and `LBY v2 探针反推` as explicit fallback/comparison algorithms.
+- Shows AM parameters and LBY parameters separately in the UI, so inactive LPI/line-screen controls no longer look applicable to every algorithm.
+- Disables stale LBY tuning variants for AM output and cleans old variant files when AM is selected.
+- Makes the standalone `从交织图生成菲林 TIFF` operation respect the selected halftone method instead of forcing LBY.
+- Adds `scripts/generate_standard_am_sample.py` for quick PNG + 1-bit TIFF grayscale ramp QA samples.
+- Adds a cross-platform Python release builder for macOS/Linux environments where PowerShell is unavailable.
 
 ### Installation
 
-Download `light_field_render-v0.1.19.zip`, then install it from Blender via `Edit > Preferences > Add-ons > Install...`.
+Download `light_field_render-v0.1.24.zip`, then install it from Blender via `Edit > Preferences > Add-ons > Install...`.
 ```

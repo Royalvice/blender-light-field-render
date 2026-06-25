@@ -217,17 +217,19 @@ class LightFieldProperties(PropertyGroup):
 
     film_halftone_method: EnumProperty(
         name="打印 TIFF 算法",
-        description="最终交付 1-bit TIFF 使用的算法；当前只保留 LBY 行阈值屏",
+        description="最终交付 1-bit TIFF 使用的算法；标准 AM 用于自然灰阶，LBY 保留作对照和回退",
         items=[
-            ("LBY", "LBY 行阈值屏", "根据刘博阳输入/输出样本拟合的 18px 水平行阈值打印 TIFF 算法"),
+            ("AM", "标准AM菲林", "标准聚集网点 AM 挂网；用黑白点大小和疏密模拟连续灰度"),
+            ("LBY", "LBY v1 行阈值屏", "旧版 18px 水平行阈值打印 TIFF 算法，用于对照和回退"),
+            ("LBY_V2", "LBY v2 探针反推", "基于 probe/618 返回件反推的 DPI 缩放行阈值 RIP 候选"),
         ],
-        default="LBY",
+        default="AM",
         update=mark_render_settings_dirty,
     )
 
     film_lpi: FloatProperty(
         name="LPI",
-        description="兼容旧参数；LBY 行阈值屏主流程不把 PE 当作挂网 LPI",
+        description="标准 AM 挂网线数；网点单元大小约为输出 PPI / LPI",
         default=200.0,
         min=1.0,
         max=1200.0,
@@ -238,7 +240,7 @@ class LightFieldProperties(PropertyGroup):
     film_dpi: IntProperty(
         name="DPI",
         description="菲林输出分辨率元数据，也是 AM 网点单元尺寸的计算基础",
-        default=2400,
+        default=4000,
         min=300,
         max=9600,
         update=mark_render_settings_dirty,
@@ -268,7 +270,7 @@ class LightFieldProperties(PropertyGroup):
     film_gamma: FloatProperty(
         name="Gamma",
         description="1-bit 挂网转换前应用的亮度 Gamma 校正",
-        default=0.25,
+        default=1.0,
         min=0.1,
         max=5.0,
         update=mark_render_settings_dirty,
@@ -372,7 +374,7 @@ class LightFieldProperties(PropertyGroup):
     delivery_ppi: IntProperty(
         name="PPI",
         description="最终交付文件的像素密度；也会写入 TIFF DPI 元数据",
-        default=0,
+        default=4000,
         min=0,
         max=9600,
     )
@@ -393,6 +395,17 @@ class LightFieldProperties(PropertyGroup):
         name="输出多版挂网候选",
         description="除 film_1bit.tif 外，同时输出三张 FM 平滑渐变候选 TIFF，便于一次打印对比",
         default=True,
+    )
+
+    delivery_source_format: EnumProperty(
+        name="交付源图格式",
+        description="最终交付流程读取或补渲染的 camera_### 源视角文件格式",
+        items=[
+            ("JPG", "JPG", "读取或补渲染 camera_###.jpg 源视角"),
+            ("PNG", "PNG", "读取或补渲染 camera_###.png 源视角"),
+        ],
+        default="JPG",
+        update=mark_render_settings_dirty,
     )
 
     delivery_calibration_target_tiff: StringProperty(

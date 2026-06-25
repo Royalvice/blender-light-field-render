@@ -53,12 +53,21 @@ def _frame_dir(output_path: str, frame: int) -> str:
     return os.path.join(output_path, f"frame_{frame:04d}")
 
 
-def _source_path(frame_dir: str, camera_index: int) -> str:
-    return os.path.join(frame_dir, f"camera_{camera_index:03d}.jpg")
+def _source_extension(source_format: str) -> str:
+    fmt = (source_format or "JPG").upper()
+    return ".jpg" if fmt in {"JPG", "JPEG"} else ".png"
 
 
-def _source_paths(frame_dir: str, camera_count: int) -> list[str]:
-    return [_source_path(frame_dir, i) for i in range(camera_count)]
+def _source_blender_format(source_format: str) -> str:
+    return "JPEG" if (source_format or "JPG").upper() in {"JPG", "JPEG"} else "PNG"
+
+
+def _source_path(frame_dir: str, camera_index: int, source_format: str = "JPG") -> str:
+    return os.path.join(frame_dir, f"camera_{camera_index:03d}{_source_extension(source_format)}")
+
+
+def _source_paths(frame_dir: str, camera_count: int, source_format: str = "JPG") -> list[str]:
+    return [_source_path(frame_dir, i, source_format) for i in range(camera_count)]
 
 
 def _source_is_valid(path: str, width: int, height: int) -> bool:
@@ -116,7 +125,7 @@ def _build_delivery_settings(
         write_interlaced_tiff=write_interlaced_tiff,
         write_film_tiff=write_film_tiff,
         write_halftone_variants=props.delivery_write_halftone_variants,
-        source_format="JPG",
+        source_format=props.delivery_source_format,
     )
 
 
@@ -153,25 +162,27 @@ def _render_source_views(context, frame_dir: str, indices: list[int], progress_c
     props = scene.light_field_props
     control = get_light_field_control()
     os.makedirs(frame_dir, exist_ok=True)
-    _set_image_settings(scene, "JPEG")
+    source_format = props.delivery_source_format
+    _set_image_settings(scene, _source_blender_format(source_format))
     total = len(indices)
     for completed, camera_index in enumerate(indices, start=1):
         if props.delivery_stop_requested:
             raise DeliveryCancelled("用户停止了交付生成")
         progress_callback("渲染源视角", completed, total, f"相机 {camera_index + 1}/{props.camera_count}")
         control.set_active_camera(camera_index)
-        scene.render.filepath = _source_path(frame_dir, camera_index)
+        scene.render.filepath = _source_path(frame_dir, camera_index, source_format)
         bpy.ops.render.render(write_still=True)
         _safe_redraw()
 
 
 def _render_single_source_view(context, frame_dir: str, camera_index: int) -> None:
     scene = context.scene
+    props = scene.light_field_props
     control = get_light_field_control()
     os.makedirs(frame_dir, exist_ok=True)
-    _set_image_settings(scene, "JPEG")
+    _set_image_settings(scene, _source_blender_format(props.delivery_source_format))
     control.set_active_camera(camera_index)
-    scene.render.filepath = _source_path(frame_dir, camera_index)
+    scene.render.filepath = _source_path(frame_dir, camera_index, props.delivery_source_format)
     bpy.ops.render.render(write_still=True)
     _safe_redraw()
 
@@ -203,14 +214,14 @@ def _blender_image_rgb_rows(image):
     return width, height, rows
 
 
-def _cache_jpg_sources_as_png(context, source_paths: list[str], progress_callback, stop_callback) -> tuple[str, list[str]]:
+def _cache_sources_as_png(context, source_paths: list[str], progress_callback, stop_callback) -> tuple[str, list[str]]:
     cache_dir = tempfile.mkdtemp(prefix="light_field_delivery_sources_")
     cached_paths = []
     total = len(source_paths)
     for index, source_path in enumerate(source_paths, start=1):
         if stop_callback():
             raise DeliveryCancelled("用户停止了交付生成")
-        progress_callback("解码 JPG 源视角", index, total, os.path.basename(source_path))
+        progress_callback("解码源视角", index, total, os.path.basename(source_path))
         image = bpy.data.images.load(source_path, check_existing=False)
         try:
             width, height, rows = _blender_image_rgb_rows(image)
@@ -304,7 +315,7 @@ class _DeliveryRunnerMixin:
 
         frame = self.scene.frame_current
         self.frame_dir = _frame_dir(self.output_root, frame)
-        self.source_paths = _source_paths(self.frame_dir, self.props.camera_count)
+        self.source_paths = _source_paths(self.frame_dir, self.props.camera_count, self.settings.source_format)
         if force_rerender:
             self.invalid_indices = list(range(self.props.camera_count))
         else:
@@ -322,16 +333,22 @@ class _DeliveryRunnerMixin:
             self.props.resolution_y,
         )
         if invalid_after_render:
-            missing = ", ".join(f"camera_{idx:03d}.jpg" for idx in invalid_after_render[:5])
-            raise DeliveryError(f"源视角 JPG 不完整或尺寸不匹配: {missing}")
+            ext = _source_extension(self.settings.source_format)
+            missing = ", ".join(f"camera_{idx:03d}{ext}" for idx in invalid_after_render[:5])
+            raise DeliveryError(f"源视角 {self.settings.source_format} 不完整或尺寸不匹配: {missing}")
 
     def _prepare_worker_sources(self, context) -> None:
+        if (self.settings.source_format or "JPG").upper() == "PNG":
+            self.source_cache_dir = None
+            self.worker_source_paths = self.source_paths
+            self._progress("准备 PNG 源视角", self.props.camera_count, self.props.camera_count, "使用内置 PNG 解码")
+            return
         if _use_direct_jpg_sources():
             self.source_cache_dir = None
             self.worker_source_paths = self.source_paths
             self._progress("准备 JPG 源视角", self.props.camera_count, self.props.camera_count, "使用 Native 直接解码")
             return
-        self.source_cache_dir, self.worker_source_paths = _cache_jpg_sources_as_png(
+        self.source_cache_dir, self.worker_source_paths = _cache_sources_as_png(
             context,
             self.source_paths,
             self._progress,
@@ -653,6 +670,16 @@ class LIGHTFIELD_OT_halftone_interlaced(Operator):
         return halftone_interlaced_tiff(
             self.paths.interlaced_tiff,
             self.paths.film_1bit_tiff,
+            halftone_settings=HalftoneSettings(
+                method=self.props.film_halftone_method,
+                lpi=self.props.film_lpi,
+                angle_degrees=self.props.film_angle,
+                dot_shape=self.props.film_dot_shape,
+                gamma=self.props.film_gamma,
+                line_period_px=self.props.film_line_period_px,
+                line_phase_y=self.props.film_line_phase_y,
+                line_density=self.props.film_line_density,
+            ),
             ppi=self.props.delivery_ppi,
             target_tiff=self._target_tiff(),
             calibration_report_json=report_path,

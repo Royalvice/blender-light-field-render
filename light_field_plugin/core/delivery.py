@@ -57,6 +57,20 @@ LBY_LIKE_FIT_NOTE = (
     "18 px horizontal row-threshold screen fitted on target-active regions from the 150 JPG -> TIFF sample; "
     "full-size target-active mismatch 3.7562% with a 32 px dilated target-black mask"
 )
+LBY_V2_BASE_PPI = 4000
+LBY_V2_LINE_PERIOD_PX = 18.0
+LBY_V2_LINE_PHASE_Y = 0.0
+LBY_V2_LINE_GAMMA = 0.25
+LBY_V2_LINE_DENSITY = 0.25
+LBY_V2_LINE_BIAS = -0.05
+LBY_V2_LINE_THRESHOLDS = LBY_LINE_THRESHOLDS
+LBY_V2_FIT_NOTE = (
+    "LBY v2 reverse-engineering profile: keeps the proven row-threshold RIP family from v1, "
+    "uses code constants instead of runtime calibration files, and scales the 18 px row period from "
+    "the 4000 dpi probe/reference target to the requested output dpi. "
+    "This is the active candidate for payload-exact fitting against the 624 probe, 618 4000 dpi, "
+    "and 618 8000 dpi targets."
+)
 
 
 @dataclass(frozen=True)
@@ -223,6 +237,8 @@ class HalftoneProfile:
     photometric_interpretation: int
     black_is_zero: bool
     fit_note: str
+    reference_ppi: int = 4000
+    period_scales_with_ppi: bool = False
 
 
 LBY_LIKE_PROFILE = HalftoneProfile(
@@ -240,6 +256,42 @@ LBY_LIKE_PROFILE = HalftoneProfile(
     fit_note=LBY_LIKE_FIT_NOTE,
 )
 
+LBY_V2_PROFILE = HalftoneProfile(
+    name="LBY_RIP_v2",
+    algorithm="LBY v2 dpi-scaled row-threshold RIP candidate",
+    family="ROW_THRESHOLD_DPI_SCALED",
+    period_px=LBY_V2_LINE_PERIOD_PX,
+    phase_y=LBY_V2_LINE_PHASE_Y,
+    gamma=LBY_V2_LINE_GAMMA,
+    density=LBY_V2_LINE_DENSITY,
+    bias=LBY_V2_LINE_BIAS,
+    thresholds=LBY_V2_LINE_THRESHOLDS,
+    photometric_interpretation=1,
+    black_is_zero=LBY_LIKE_BLACK_IS_ZERO,
+    fit_note=LBY_V2_FIT_NOTE,
+    reference_ppi=LBY_V2_BASE_PPI,
+    period_scales_with_ppi=True,
+)
+
+HALFTONE_PROFILES = {
+    "LBY": LBY_LIKE_PROFILE,
+    "LBY_V1": LBY_LIKE_PROFILE,
+    "LBY_V2": LBY_V2_PROFILE,
+}
+
+
+def get_halftone_profile(method: str) -> HalftoneProfile:
+    return HALFTONE_PROFILES.get((method or "LBY").upper(), LBY_LIKE_PROFILE)
+
+
+def effective_halftone_period_px(profile: HalftoneProfile, dpi: int, override: Optional[float] = None) -> float:
+    if profile.period_scales_with_ppi:
+        reference = max(1.0, float(profile.reference_ppi))
+        return max(1.0, float(profile.period_px) * max(1.0, float(dpi)) / reference)
+    if override is not None and float(override) > 0.0:
+        return max(1.0, float(override))
+    return max(1.0, float(profile.period_px))
+
 
 def halftone_profile_to_manifest(profile: HalftoneProfile) -> dict:
     return {
@@ -247,6 +299,8 @@ def halftone_profile_to_manifest(profile: HalftoneProfile) -> dict:
         "algorithm": profile.algorithm,
         "family": profile.family,
         "screen_period_px": profile.period_px,
+        "screen_reference_ppi": profile.reference_ppi,
+        "screen_period_scales_with_ppi": profile.period_scales_with_ppi,
         "screen_gamma": profile.gamma,
         "screen_density": profile.density,
         "screen_bias": profile.bias,
@@ -255,6 +309,20 @@ def halftone_profile_to_manifest(profile: HalftoneProfile) -> dict:
         "photometric_interpretation": profile.photometric_interpretation,
         "black_is_zero": profile.black_is_zero,
         "fit_note": profile.fit_note,
+    }
+
+
+def standard_am_halftone_manifest(settings: "HalftoneSettings", ppi: int) -> dict:
+    return {
+        "algorithm": "standard clustered-dot AM film screen",
+        "family": "AM_CLUSTERED_DOT",
+        "screen_lpi": settings.lpi,
+        "screen_angle_degrees": settings.angle_degrees,
+        "screen_dot_shape": settings.dot_shape,
+        "screen_cell_px": max(2.0, float(ppi) / max(1.0, float(settings.lpi))),
+        "luma_standard": "Rec.709",
+        "photometric_interpretation": 1,
+        "black_is_zero": True,
     }
 
 
@@ -268,7 +336,7 @@ class InterlaceSettings:
 
 @dataclass
 class HalftoneSettings:
-    method: str = "FM"
+    method: str = "AM"
     lpi: int = 200
     angle_degrees: float = 45.0
     dot_shape: str = "ROUND"
@@ -1266,12 +1334,12 @@ class StreamingHalftoner:
         width: int,
         settings: HalftoneSettings,
         dpi: int,
-        profile: HalftoneProfile = LBY_LIKE_PROFILE,
+        profile: Optional[HalftoneProfile] = None,
     ):
         self.width = width
         self.settings = settings
         self.dpi = int(dpi)
-        self.profile = profile
+        self.profile = profile or get_halftone_profile(settings.method)
         self._next_errors = [0.0 for _ in range(width)]
         self._method = (settings.method or "FM").upper()
         self._angle = math.radians(settings.angle_degrees)
@@ -1284,7 +1352,7 @@ class StreamingHalftoner:
     def process_rgb_row(self, y: int, row: bytes) -> List[bool]:
         if len(row) != self.width * 3:
             raise ValueError("Halftone row length does not match image width")
-        if self._method == "LBY":
+        if self._method in HALFTONE_PROFILES:
             if _np is not None:
                 return self._process_lby_row_numpy(y, row)
             return self._process_lby_row(y, row)
@@ -1336,10 +1404,10 @@ class StreamingHalftoner:
 
     def _process_lby_row(self, y: int, row: bytes) -> List[bool]:
         profile = self.profile
-        period = max(1.0, float(self.settings.line_period_px or profile.period_px))
-        phase_y = float(self.settings.line_phase_y)
-        gamma = max(1.0e-6, float(self.settings.gamma or profile.gamma))
-        density = float(self.settings.line_density or profile.density)
+        period = effective_halftone_period_px(profile, self.dpi, self.settings.line_period_px)
+        phase_y = float(profile.phase_y if profile.period_scales_with_ppi else self.settings.line_phase_y)
+        gamma = max(1.0e-6, float(profile.gamma if profile.period_scales_with_ppi else (self.settings.gamma or profile.gamma)))
+        density = float(profile.density if profile.period_scales_with_ppi else (self.settings.line_density or profile.density))
         bias = float(profile.bias)
         thresholds = profile.thresholds
         black = [False for _ in range(self.width)]
@@ -1362,11 +1430,12 @@ class StreamingHalftoner:
         rgb = _np.frombuffer(row, dtype=_np.uint8).reshape(self.width, 3).astype(_np.float64)
         luma = 0.299 * rgb[:, 0] + 0.587 * rgb[:, 1] + 0.114 * rgb[:, 2]
         darkness = 1.0 - _np.clip(luma / 255.0, 0.0, 1.0)
-        gamma = max(1.0e-6, float(self.settings.gamma or profile.gamma))
-        density = float(self.settings.line_density or profile.density)
+        gamma = max(1.0e-6, float(profile.gamma if profile.period_scales_with_ppi else (self.settings.gamma or profile.gamma)))
+        density = float(profile.density if profile.period_scales_with_ppi else (self.settings.line_density or profile.density))
         adjusted = _np.clip(density * _np.power(darkness, gamma) + float(profile.bias), 0.0, 1.0)
-        period = max(1.0, float(self.settings.line_period_px or profile.period_px))
-        screen_phase = int(math.floor((float(y) + float(self.settings.line_phase_y)) % period)) % len(profile.thresholds)
+        period = effective_halftone_period_px(profile, self.dpi, self.settings.line_period_px)
+        phase_y = float(profile.phase_y if profile.period_scales_with_ppi else self.settings.line_phase_y)
+        screen_phase = int(math.floor((float(y) + phase_y) % period)) % len(profile.thresholds)
         return adjusted >= float(profile.thresholds[screen_phase])
 
     def _process_lby_tuned_row(self, y: int, row: bytes) -> List[bool]:
@@ -1739,10 +1808,11 @@ class NativeAmBatchGenerator:
         if not renderer._same_source_dimensions:
             raise DeliveryError("Native batch generation requires equal source dimensions")
         self.method = (settings.halftone.method or "FM").upper()
-        if settings.write_film_tiff and self.method not in {"AM", "LBY"}:
+        if settings.write_film_tiff and self.method not in {"AM", *HALFTONE_PROFILES.keys()}:
             raise DeliveryError("Native batch generation currently supports AM and LBY halftone only")
 
         self.settings = settings
+        self.profile = get_halftone_profile(self.method)
         self.width = renderer.width_px
         self.height = renderer.height_px
         self.source_width = renderer._np_sources[0].width
@@ -1786,7 +1856,7 @@ class NativeAmBatchGenerator:
         self.cell_size = max(2.0, float(settings.ppi) / max(1.0, float(settings.halftone.lpi)))
         shape = (settings.halftone.dot_shape or "ROUND").upper()
         self.dot_shape = {"ROUND": 0, "DIAMOND": 1, "ELLIPSE": 2}.get(shape, 0)
-        self.lby_thresholds = _np.ascontiguousarray(_np.asarray(LBY_LIKE_PROFILE.thresholds, dtype=_np.float64))
+        self.lby_thresholds = _np.ascontiguousarray(_np.asarray(self.profile.thresholds, dtype=_np.float64))
 
     @classmethod
     def can_use(cls, renderer: InterlaceRenderer, settings: DeliverySettings) -> bool:
@@ -1794,7 +1864,7 @@ class NativeAmBatchGenerator:
             native_available()
             and renderer._same_source_dimensions
             and abs(float(settings.interlace.angle_degrees)) < 1.0e-9
-            and (not settings.write_film_tiff or (settings.halftone.method or "FM").upper() in {"AM", "LBY"})
+            and (not settings.write_film_tiff or (settings.halftone.method or "FM").upper() in {"AM", *HALFTONE_PROFILES.keys()})
         )
 
     @staticmethod
@@ -1806,7 +1876,7 @@ class NativeAmBatchGenerator:
     def generate(self, y_start: int, rows: int, include_rgb: bool = True, include_bits: bool = True):
         rgb = _np.empty((rows, self.width, 3), dtype=_np.uint8) if include_rgb else None
         bits = _np.empty((rows, self.row_bytes), dtype=_np.uint8) if include_bits else None
-        if self.method == "LBY":
+        if self.method in HALFTONE_PROFILES:
             result = self.dll.lf_generate_lby_batch(
                 self._ptr(self.source_stack, ctypes.c_uint8),
                 self.source_count,
@@ -1821,11 +1891,11 @@ class NativeAmBatchGenerator:
                 self._ptr(self.x1, ctypes.c_int32),
                 self._ptr(self.tx, ctypes.c_float),
                 float(self.y_scale),
-                float(self.settings.halftone.line_period_px or LBY_LIKE_PROFILE.period_px),
-                float(self.settings.halftone.line_phase_y),
-                float(self.settings.halftone.gamma or LBY_LIKE_PROFILE.gamma),
-                float(self.settings.halftone.line_density or LBY_LIKE_PROFILE.density),
-                float(LBY_LIKE_PROFILE.bias),
+                float(effective_halftone_period_px(self.profile, self.settings.ppi, self.settings.halftone.line_period_px)),
+                float(self.profile.phase_y if self.profile.period_scales_with_ppi else self.settings.halftone.line_phase_y),
+                float(self.profile.gamma if self.profile.period_scales_with_ppi else (self.settings.halftone.gamma or self.profile.gamma)),
+                float(self.profile.density if self.profile.period_scales_with_ppi else (self.settings.halftone.line_density or self.profile.density)),
+                float(self.profile.bias),
                 self._ptr(self.lby_thresholds, ctypes.c_double),
                 int(self.lby_thresholds.size),
                 self._ptr(rgb, ctypes.c_uint8),
@@ -1983,14 +2053,24 @@ def generate_delivery_outputs(
     os.makedirs(paths.output_dir, exist_ok=True)
     if not settings.write_interlaced_tiff and not settings.write_film_tiff:
         raise DeliveryError("At least one delivery output must be enabled")
+    variant_paths = (
+        halftone_variant_output_paths(paths.film_1bit_tiff)
+        if settings.write_film_tiff
+        and settings.write_halftone_variants
+        and (settings.halftone.method or "").upper() in HALFTONE_PROFILES
+        else ()
+    )
     tmp_files = [
         _tmp_path(paths.preview_png),
         _tmp_path(paths.manifest_json),
     ]
     if settings.write_film_tiff:
         tmp_files.append(_tmp_path(paths.film_1bit_tiff))
-        if settings.write_halftone_variants:
-            tmp_files.extend(_tmp_path(path) for path in halftone_variant_output_paths(paths.film_1bit_tiff))
+        tmp_files.extend(_tmp_path(path) for path in variant_paths)
+        if not variant_paths:
+            for path in halftone_variant_output_paths(paths.film_1bit_tiff):
+                _remove_if_exists(path)
+                _remove_if_exists(_tmp_path(path))
     else:
         _remove_if_exists(paths.film_1bit_tiff)
         _remove_if_exists(_tmp_path(paths.film_1bit_tiff))
@@ -2026,7 +2106,6 @@ def generate_delivery_outputs(
         _emit_progress(progress_callback, stage, 0, height_px)
         native_used = False
         native_generator = None
-        variant_paths = halftone_variant_output_paths(paths.film_1bit_tiff) if settings.write_film_tiff and settings.write_halftone_variants else ()
         if NativeAmBatchGenerator.can_use(renderer, settings):
             native_generator = NativeAmBatchGenerator(renderer, settings)
             batch_rows = 256 if variant_paths else 1024
@@ -2235,7 +2314,8 @@ def halftone_interlaced_tiff(
     interlaced_tiff: str,
     film_tiff: str,
     *,
-    profile: HalftoneProfile = LBY_LIKE_PROFILE,
+    profile: Optional[HalftoneProfile] = None,
+    halftone_settings: Optional[HalftoneSettings] = None,
     ppi: Optional[int] = None,
     manifest_json: Optional[str] = None,
     target_tiff: Optional[str] = None,
@@ -2248,7 +2328,21 @@ def halftone_interlaced_tiff(
     info = read_uncompressed_rgb_tiff_info(interlaced_tiff)
     output_ppi = int(ppi or info.dpi_x or 4000)
     tmp_film = _tmp_path(film_tiff)
-    variant_paths = halftone_variant_output_paths(film_tiff) if write_variants else ()
+    if halftone_settings is None:
+        profile = profile or LBY_LIKE_PROFILE
+        halftone_settings = HalftoneSettings(
+            method="LBY",
+            gamma=profile.gamma,
+            line_period_px=profile.period_px,
+            line_phase_y=profile.phase_y,
+            line_density=profile.density,
+        )
+    method = (halftone_settings.method or "").upper()
+    if method in HALFTONE_PROFILES:
+        profile = profile or get_halftone_profile(method)
+    else:
+        profile = None
+    variant_paths = halftone_variant_output_paths(film_tiff) if write_variants and method in HALFTONE_PROFILES else ()
     tmp_variants = [_tmp_path(path) for path in variant_paths]
     tmp_manifest = _tmp_path(manifest_json) if manifest_json else None
     tmp_report = _tmp_path(calibration_report_json) if calibration_report_json else None
@@ -2258,13 +2352,7 @@ def halftone_interlaced_tiff(
 
     halftoner = StreamingHalftoner(
         info.width,
-        HalftoneSettings(
-            method="LBY",
-            gamma=profile.gamma,
-            line_period_px=profile.period_px,
-            line_phase_y=profile.phase_y,
-            line_density=profile.density,
-        ),
+        halftone_settings,
         output_ppi,
         profile=profile,
     )
@@ -2305,6 +2393,18 @@ def halftone_interlaced_tiff(
 
         elapsed = time.perf_counter() - start_time
         total_pixels = info.width * info.height
+        if method == "AM":
+            halftone_report = {
+                **asdict(halftone_settings),
+                "ppi_as_tiff_dpi": output_ppi,
+                **standard_am_halftone_manifest(halftone_settings, output_ppi),
+            }
+        else:
+            assert profile is not None
+            halftone_report = {
+                **halftone_profile_to_manifest(profile),
+                "screen_effective_period_px": effective_halftone_period_px(profile, output_ppi, None),
+            }
         report = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "pipeline": "interlaced_tiff_to_profiled_1bit_tiff",
@@ -2329,7 +2429,7 @@ def halftone_interlaced_tiff(
                 "black_pixels": total_black,
                 "black_ratio": total_black / total_pixels if total_pixels else 0.0,
             },
-            "halftone_profile": halftone_profile_to_manifest(profile),
+            "halftone_profile": halftone_report,
             "halftone_variants": variant_reports,
             "elapsed_seconds": elapsed,
         }
@@ -2377,10 +2477,20 @@ def build_manifest(settings: DeliverySettings, result: DeliveryResult, source_pa
         **asdict(settings.halftone),
         "ppi_as_tiff_dpi": settings.ppi,
     }
-    if (settings.halftone.method or "").upper() == "LBY":
+    method = (settings.halftone.method or "").upper()
+    if method == "AM":
+        halftone.update(standard_am_halftone_manifest(settings.halftone, settings.ppi))
+    elif method in HALFTONE_PROFILES:
+        profile = get_halftone_profile(method)
+        profile_manifest = halftone_profile_to_manifest(profile)
+        profile_manifest["screen_effective_period_px"] = effective_halftone_period_px(
+            profile,
+            settings.ppi,
+            settings.halftone.line_period_px,
+        )
         halftone.update(
             {
-                **halftone_profile_to_manifest(LBY_LIKE_PROFILE),
+                **profile_manifest,
             }
         )
     return {
@@ -2397,7 +2507,8 @@ def build_manifest(settings: DeliverySettings, result: DeliveryResult, source_pa
             "preview_height_px": result.preview_height,
             "write_interlaced_tiff": settings.write_interlaced_tiff,
             "write_film_tiff": settings.write_film_tiff,
-            "write_halftone_variants": settings.write_halftone_variants,
+            "write_halftone_variants": bool(result.variant_film_tiffs),
+            "requested_halftone_variants": settings.write_halftone_variants,
         },
         "source_views": {
             "camera_count": settings.camera_count,
@@ -2419,13 +2530,13 @@ def build_manifest(settings: DeliverySettings, result: DeliveryResult, source_pa
             "film_1bit_tiff": os.path.basename(result.paths.film_1bit_tiff) if settings.write_film_tiff else None,
             "film_1bit_variants": [
                 os.path.basename(path) for path in result.variant_film_tiffs
-            ] if settings.write_film_tiff and settings.write_halftone_variants else [],
+            ] if settings.write_film_tiff and result.variant_film_tiffs else [],
             "manifest_json": os.path.basename(result.paths.manifest_json),
         },
         "halftone_variants": [
             halftone_variant_to_manifest(variant)
             for variant in HALFTONE_PRINT_VARIANTS
-        ] if settings.write_film_tiff and settings.write_halftone_variants else [],
+        ] if settings.write_film_tiff and result.variant_film_tiffs else [],
         "elapsed_seconds": result.elapsed_seconds,
     }
 

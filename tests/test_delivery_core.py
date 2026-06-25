@@ -160,6 +160,37 @@ class DeliveryCoreTests(unittest.TestCase):
         extremes = extremes_halftoner.process_rgb_row(17, bytes([0, 0, 0, 255, 255, 255]))
         self.assertEqual(list(extremes), [True, False])
 
+    def test_standard_am_defaults_and_density_are_monotonic(self):
+        settings = self.delivery.HalftoneSettings()
+        self.assertEqual(settings.method, "AM")
+        self.assertEqual(settings.lpi, 200)
+        self.assertEqual(settings.angle_degrees, 45.0)
+        self.assertEqual(settings.dot_shape, "ROUND")
+        self.assertEqual(settings.gamma, 1.0)
+
+        halftoner = self.delivery.StreamingHalftoner(80, settings, 4000)
+        counts = []
+        for value in (255, 192, 128, 64, 0):
+            total = 0
+            row = bytes([value, value, value] * 80)
+            for y in range(80):
+                total += sum(bool(pixel) for pixel in halftoner.process_rgb_row(y, row))
+            counts.append(total)
+        self.assertEqual(counts, sorted(counts))
+
+    def test_lby_v2_profile_scales_period_with_dpi(self):
+        profile = self.delivery.get_halftone_profile("LBY_V2")
+        self.assertEqual(profile.name, "LBY_RIP_v2")
+        self.assertEqual(profile.family, "ROW_THRESHOLD_DPI_SCALED")
+        self.assertEqual(self.delivery.effective_halftone_period_px(profile, 4000), 18.0)
+        self.assertEqual(self.delivery.effective_halftone_period_px(profile, 8000), 36.0)
+
+        settings = self.delivery.HalftoneSettings(method="LBY_V2")
+        halftoner_4000 = self.delivery.StreamingHalftoner(4, settings, 4000)
+        halftoner_8000 = self.delivery.StreamingHalftoner(4, settings, 8000)
+        self.assertIs(halftoner_4000.profile, profile)
+        self.assertIs(halftoner_8000.profile, profile)
+
     def test_halftone_interlaced_tiff_writes_report_and_comparison(self):
         with tempfile.TemporaryDirectory() as tmp:
             interlaced = os.path.join(tmp, "interlaced.tif")
@@ -186,6 +217,19 @@ class DeliveryCoreTests(unittest.TestCase):
             self.assertEqual(report["film_tiff"]["width_px"], 4)
             self.assertEqual(report["film_tiff"]["height_px"], 2)
             self.assertEqual(report["halftone_variants"], [])
+
+            am_report = self.delivery.halftone_interlaced_tiff(
+                interlaced,
+                os.path.join(tmp, "film_am_1bit.tif"),
+                halftone_settings=self.delivery.HalftoneSettings(method="AM", lpi=200, angle_degrees=45.0),
+                ppi=4000,
+                calibration_report_json=report_path,
+                write_variants=True,
+            )
+            self.assertEqual(am_report["halftone_profile"]["family"], "AM_CLUSTERED_DOT")
+            self.assertEqual(am_report["halftone_profile"]["screen_lpi"], 200)
+            self.assertEqual(am_report["halftone_profile"]["luma_standard"], "Rec.709")
+            self.assertEqual(am_report["halftone_variants"], [])
 
             target = os.path.join(tmp, "target.tif")
             shutil.copyfile(film, target)
@@ -268,6 +312,8 @@ class DeliveryCoreTests(unittest.TestCase):
             self.assertEqual(manifest["delivery"]["height_px"], 5)
             self.assertFalse(manifest["delivery"]["write_halftone_variants"])
             self.assertEqual(manifest["source_views"]["camera_count"], 3)
+            self.assertEqual(manifest["source_views"]["source_format"], "JPG")
+            self.assertEqual(manifest["source_views"]["files"][0], "camera_000.jpg")
             self.assertEqual(manifest["files"]["film_1bit_variants"], [])
 
     def test_generate_delivery_outputs_can_write_halftone_variants(self):
@@ -290,6 +336,7 @@ class DeliveryCoreTests(unittest.TestCase):
                 interlace=self.delivery.InterlaceSettings(pe=16.7240, angle_degrees=0.0, offset=0.0),
                 halftone=self.delivery.HalftoneSettings(method="LBY", gamma=0.25),
                 write_halftone_variants=True,
+                source_format="PNG",
             )
 
             result = self.delivery.generate_delivery_outputs(source_paths, tmp, settings)
@@ -303,6 +350,8 @@ class DeliveryCoreTests(unittest.TestCase):
 
             manifest = json.loads(Path(result.paths.manifest_json).read_text(encoding="utf-8"))
             self.assertTrue(manifest["delivery"]["write_halftone_variants"])
+            self.assertEqual(manifest["source_views"]["source_format"], "PNG")
+            self.assertEqual(manifest["source_views"]["files"][0], "camera_000.png")
             self.assertEqual(
                 sorted(manifest["files"]["film_1bit_variants"]),
                 sorted(variant.filename for variant in self.delivery.HALFTONE_PRINT_VARIANTS),
@@ -312,6 +361,89 @@ class DeliveryCoreTests(unittest.TestCase):
                 sorted(item["family"] for item in manifest["halftone_variants"]),
                 ["LBY_TUNED"] * len(self.delivery.HALFTONE_PRINT_VARIANTS),
             )
+
+    def test_standard_am_delivery_disables_lby_variants_and_reports_screen(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source_paths = []
+            for idx, color in enumerate(((255, 255, 255), (0, 0, 0))):
+                path = os.path.join(tmp, f"camera_{idx:03d}.png")
+                row = bytes(color * 8)
+                self.delivery.write_rgb_png(path, 8, 4, [row, row, row, row])
+                source_paths.append(path)
+
+            settings = self.delivery.DeliverySettings(
+                width_mm=2.54,
+                height_mm=2.54,
+                ppi=4000,
+                frame=1,
+                camera_count=2,
+                source_width=8,
+                source_height=4,
+                interlace=self.delivery.InterlaceSettings(pe=16.7240, angle_degrees=0.0, offset=0.0),
+                halftone=self.delivery.HalftoneSettings(method="AM", lpi=200, angle_degrees=45.0, dot_shape="ROUND"),
+                write_halftone_variants=True,
+                source_format="PNG",
+                confirm_large_output=True,
+            )
+            stale_dir = os.path.join(tmp, "delivery", "frame_0001")
+            os.makedirs(stale_dir, exist_ok=True)
+            for variant in self.delivery.HALFTONE_PRINT_VARIANTS:
+                Path(stale_dir, variant.filename).write_bytes(b"stale")
+
+            result = self.delivery.generate_delivery_outputs(source_paths, tmp, settings)
+            self.assertEqual(result.variant_film_tiffs, ())
+            for variant in self.delivery.HALFTONE_PRINT_VARIANTS:
+                self.assertFalse(os.path.exists(os.path.join(tmp, "delivery", "frame_0001", variant.filename)))
+
+            manifest = json.loads(Path(result.paths.manifest_json).read_text(encoding="utf-8"))
+            self.assertFalse(manifest["delivery"]["write_halftone_variants"])
+            self.assertTrue(manifest["delivery"]["requested_halftone_variants"])
+            self.assertEqual(manifest["halftone"]["family"], "AM_CLUSTERED_DOT")
+            self.assertEqual(manifest["halftone"]["screen_lpi"], 200)
+            self.assertEqual(manifest["halftone"]["screen_angle_degrees"], 45.0)
+            self.assertEqual(manifest["halftone"]["screen_dot_shape"], "ROUND")
+            self.assertEqual(manifest["halftone"]["luma_standard"], "Rec.709")
+            self.assertEqual(manifest["files"]["film_1bit_variants"], [])
+            self.assertEqual(manifest["halftone_variants"], [])
+
+    def test_standard_am_native_matches_python_when_available(self):
+        if not self.delivery.native_available():
+            self.skipTest("native AM generator is not available")
+        with tempfile.TemporaryDirectory() as tmp:
+            source_paths = []
+            for idx, color in enumerate(((255, 255, 255), (0, 0, 0))):
+                path = os.path.join(tmp, f"camera_{idx:03d}.png")
+                rows = []
+                for y in range(12):
+                    value = max(0, min(255, color[0] - y * 8))
+                    rows.append(bytes([value, value, value] * 12))
+                self.delivery.write_rgb_png(path, 12, 12, rows)
+                source_paths.append(path)
+
+            base_settings = dict(
+                width_mm=5.08,
+                height_mm=5.08,
+                ppi=100,
+                frame=1,
+                camera_count=2,
+                source_width=12,
+                source_height=12,
+                halftone=self.delivery.HalftoneSettings(method="AM", lpi=50, angle_degrees=45.0, gamma=1.0),
+                write_interlaced_tiff=False,
+                source_format="PNG",
+            )
+            native_settings = self.delivery.DeliverySettings(
+                interlace=self.delivery.InterlaceSettings(pe=16.7240, angle_degrees=0.0, offset=0.0),
+                **base_settings,
+            )
+            native_result = self.delivery.generate_delivery_outputs(source_paths, os.path.join(tmp, "native"), native_settings)
+            original_can_use = self.delivery.NativeAmBatchGenerator.can_use
+            try:
+                self.delivery.NativeAmBatchGenerator.can_use = classmethod(lambda cls, renderer, settings: False)
+                python_result = self.delivery.generate_delivery_outputs(source_paths, os.path.join(tmp, "python"), native_settings)
+            finally:
+                self.delivery.NativeAmBatchGenerator.can_use = original_can_use
+            self.assertEqual(Path(native_result.paths.film_1bit_tiff).read_bytes(), Path(python_result.paths.film_1bit_tiff).read_bytes())
 
     def test_generate_delivery_outputs_can_skip_interlaced_tiff(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,13 +1,13 @@
 # Light Field Render 用户手册
 
-本文档对应 `Light Field Render v0.1.19`，目标 Blender 版本为 4.2 LTS。
+本文档对应 `Light Field Render v0.1.24`，目标 Blender 版本为 4.2 LTS。
 
 ## 1. 安装
 
 下载 GitHub Release 中的插件 ZIP：
 
 ```text
-light_field_render-v0.1.19.zip
+light_field_render-v0.1.24.zip
 ```
 
 安装步骤：
@@ -15,7 +15,7 @@ light_field_render-v0.1.19.zip
 1. 打开 Blender。
 2. 进入 `Edit > Preferences > Add-ons`。
 3. 点击 `Install...`。
-4. 选择 `light_field_render-v0.1.19.zip`。
+4. 选择 `light_field_render-v0.1.24.zip`。
 5. 勾选启用 `Light Field Render`。
 6. 在 3D Viewport 右侧栏打开 `光场` 面板。
 
@@ -105,14 +105,25 @@ height_px = round(height_mm / 25.4 * ppi)
 - `PhotometricInterpretation=1`
 - 解码语义为 `0=black`、`1=white`
 
-v0.1.19 的最终打印算法只暴露 `LBY 行阈值屏`：
+默认打印算法是 `标准AM菲林`，用于按传统聚集网点挂网生成自然灰阶：
 
-- `线周期 px`: 行阈值屏垂直周期，默认 `18`。
-- `Y 相位 px`: Y 方向相位，默认 `0`。
-- `密度`: 全局暗度倍率，默认 `0.25`。
-- `Gamma`: tone response，默认 `0.25`。
+- `PPI`: 最终交付文件像素密度，默认 `4000`，也会写入 TIFF DPI 元数据。
+- `LPI`: AM 挂网线数，默认 `200`；网点单元尺寸约为 `PPI / LPI`。
+- `网角`: 默认 `45°`。
+- `网点形状`: 默认圆形。
+- `Gamma`: 标准 AM 默认 `1.0`，即线性亮度响应。
 
-固定 profile 名称为 `LBY_row_threshold_v1`。它是从 150 张 JPG 输入和厂商 1-bit TIFF 输出 pair 中拟合得到的全局、确定性、可解释算法，不包含针对单张图片的特殊硬编码。
+`标准AM菲林` 会先按 Rec.709 亮度公式把 RGB 转成单黑版灰度，再用黑白网点的大小和疏密模拟连续灰度。它不追求和厂商 LBY 返回件逐 bit 一致，目标是灰阶渐变自然、没有大块色带。
+
+`LBY v1 行阈值屏` 和 `LBY v2 探针反推` 仍保留为旧结果对照和反推实验入口。选择 LBY 时才显示 `线周期 px`、`Y 相位 px` 和 `密度` 参数。
+
+可以用标准 AM 样张脚本生成快速验收图：
+
+```powershell
+python scripts\generate_standard_am_sample.py --output-dir standard_am_sample
+```
+
+脚本会输出连续调 PNG、真实 1-bit TIFF 和 manifest，用于检查灰阶块、渐变和细线区域。
 
 ## 8. 最终交付按钮
 

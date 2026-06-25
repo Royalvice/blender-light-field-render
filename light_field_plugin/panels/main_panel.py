@@ -187,15 +187,23 @@ class LIGHTFIELD_PT_film_tiff(Panel):
 
         col = layout.column(align=True)
         col.prop(props, "film_halftone_method", text="挂网方式")
-        col.prop(props, "film_dpi", text="DPI")
-        col.prop(props, "film_line_period_px", text="线周期 px")
-        col.prop(props, "film_line_phase_y", text="Y 相位 px")
-        col.prop(props, "film_line_density", text="密度")
+        if props.film_halftone_method == "AM":
+            col.prop(props, "film_dpi", text="DPI")
+            col.prop(props, "film_lpi", text="LPI")
+            col.prop(props, "film_angle", text="网角")
+            col.prop(props, "film_dot_shape", text="网点形状")
+        else:
+            col.prop(props, "film_line_period_px", text="线周期 px")
+            col.prop(props, "film_line_phase_y", text="Y 相位 px")
+            col.prop(props, "film_line_density", text="密度")
         col.prop(props, "film_gamma", text="Gamma")
 
         box = layout.box()
         box.label(text="菲林 TIFF 为 1-bit 纯黑白输出。", icon="INFO")
-        box.label(text="LBY 行阈值屏：18px 水平周期，可走 Native 加速。")
+        if props.film_halftone_method == "AM":
+            box.label(text="标准 AM：4000 PPI / 200 LPI / 45° 圆点默认。")
+        else:
+            box.label(text="LBY 行阈值屏：用于旧结果对照和反推实验。")
 
 
 class LIGHTFIELD_PT_delivery_output(Panel):
@@ -248,6 +256,7 @@ class LIGHTFIELD_PT_delivery_output(Panel):
         layout.separator()
         col = layout.column(align=True)
         col.label(text="输出文件", icon="FILE_TICK")
+        col.prop(props, "delivery_source_format", text="源视角格式")
         col.prop(props, "delivery_write_interlaced_tiff", text="输出连续调 interlaced.tif")
         if props.delivery_write_interlaced_tiff:
             col.label(text="interlaced.tif / interlaced_preview.png")
@@ -255,9 +264,12 @@ class LIGHTFIELD_PT_delivery_output(Panel):
             col.label(text="快速模式：跳过 interlaced.tif")
             col.label(text="输出 interlaced_preview.png 用于检查")
         col.label(text="film_1bit.tif / delivery_manifest.json")
-        col.label(text="1-bit 输出算法：LBY 行阈值屏", icon="INFO")
-        col.prop(props, "delivery_write_halftone_variants", text="输出多版挂网候选")
-        if props.delivery_write_halftone_variants:
+        col.prop(props, "film_halftone_method", text="挂网方式")
+        if props.film_halftone_method == "AM":
+            col.label(text="标准 AM 不输出 LBY 调参候选。", icon="INFO")
+        else:
+            col.prop(props, "delivery_write_halftone_variants", text="输出多版挂网候选")
+        if props.film_halftone_method != "AM" and props.delivery_write_halftone_variants:
             col.label(text="额外输出 low_fp / balanced / more_black", icon="INFO")
         col.prop(props, "delivery_calibration_target_tiff", text="校准目标 TIFF")
 
